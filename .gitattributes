@@ -1,0 +1,18 @@
+* text=auto eol=lf
+
+*.sh     text eol=lf
+*.cpp    text diff=cpp
+*.hpp    text diff=cpp
+*.h      text diff=cpp
+*.md     text diff=markdown
+
+*.png    binary
+*.jpg    binary
+*.gif    binary
+*.ico    binary
+*.zip    binary
+*.gz     binary
+*.zst    binary
+*.bin    binary
+*.idx    binary
+*.sqlite binary

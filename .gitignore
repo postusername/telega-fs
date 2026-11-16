@@ -1,0 +1,43 @@
+# Build output
+/build*/
+/cmake-build-*/
+/out/
+compile_commands.json
+.cache/
+
+# Local TDLib checkout and install (built separately, see README)
+/td/
+/tdlib/
+
+# Secrets, Telegram sessions, local databases
+*.secret
+*.binlog
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+.env
+/config.toml
+keyring
+
+# Logs, traces, dumps
+*.log
+*.log.*
+strace*.txt
+core
+core.[0-9]*
+perf.data*
+vgcore.*
+
+# Mount points used during development
+/mnt*/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Local agent settings
+.claude/settings.local.json
