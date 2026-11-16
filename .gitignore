@@ -42,3 +42,6 @@ vgcore.*
 
 # Local agent settings
 .claude/settings.local.json
+
+# Local retrospectives, not committed
+/docs/retro/
