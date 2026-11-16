@@ -713,12 +713,12 @@ pack_max_age   = "30s"
 | Зависимость | Версия | Откуда |
 |---|---|---|
 | Компилятор | C++20: Clang ≥ 17 или GCC ≥ 13 | система |
-| CMake, Ninja | CMake ≥ 3.24 | система |
+| CMake, Ninja | CMake ≥ 3.25 (нужен `SYSTEM` у `FetchContent_Declare`) | система |
 | libfuse3 | ≥ 3.10 | система |
 | libsodium | ≥ 1.0.18 | система |
 | zstd | ≥ 1.5 | система |
 | OpenSSL, zlib | поддерживаемые дистрибутивом | система, нужны TDLib |
-| TDLib | 1.8.70, коммит `ba976cb4a` | собирается отдельно (15.3) |
+| TDLib | 1.8.70, коммит `ba976cb4aba53a82eff425db2f85e2741774c944` | собирается отдельно (15.3) |
 | SQLite | актуальный релиз на момент M0 | amalgamation через `FetchContent` (15.2) |
 | nlohmann_json, toml++, CLI11, spdlog, GoogleTest | актуальные релизы на момент M0 | `FetchContent` |
 
@@ -740,7 +740,8 @@ pack_max_age   = "30s"
 - Собирается отдельно по инструкции из README в свой префикс. Локально это `./td/tdlib`, каталог в `.gitignore`.
 - CMake: `find_package(Td 1.8.70 EXACT REQUIRED)`, путь задаётся через `-DTd_DIR=<prefix>/lib/cmake/Td`.
 - Линкуется `Td::TdJsonStatic`: получается один бинарник, без `libtdjson.so` рядом.
-- Обновление TDLib — отдельный коммит: новый хеш в README и в этой спеке, прогон E2E.
+- TDLib собирается со стандартной библиотекой по умолчанию (libstdc++) и без `TD_ENABLE_LTO`. Сборка с `-stdlib=libc++` или с LTO даёт архивы, которые не линкуются GCC (биткод LLVM) и тянут лишнюю динамическую зависимость (раздел 15.4).
+- Обновление TDLib — отдельный коммит: новый хеш в README, в этой спеке и в `.github/workflows/ci.yml`, прогон E2E. Полный хеш коммита 1.8.70 — `ba976cb4aba53a82eff425db2f85e2741774c944`.
 - В CI установленный префикс TDLib кэшируется по хешу коммита: сборка TDLib идёт десятки минут и требует 2–3 ГБ RAM на поток.
 
 ### 15.4 Конфигурации сборки
@@ -752,20 +753,35 @@ pack_max_age   = "30s"
 | `dev` | Debug | Локальная разработка, предупреждения не ломают сборку |
 | `ci` | RelWithDebInfo, `-Werror` | Основная сборка в CI |
 | `asan` | Debug, ASan + UBSan | CI |
-| `tsan` | Debug, TSan | CI. Гоняет тесты на `LocalDirStore`: TDLib не инструментирован и в этих тестах не участвует |
+| `tsan` | Debug, TSan | CI. Гоняет тесты на `LocalDirStore`: TDLib не инструментирован и в этих тестах не участвует. Исключение — `telega_fs.version`, он вызывает синхронный `td_execute` без потоков TDLib |
 | `release` | Release, LTO | Бинарник для установки |
 
 - Предупреждения: `-Wall -Wextra -Wpedantic -Wshadow -Wconversion`, в `ci` плюс `-Werror`.
-- Определения: `_FILE_OFFSET_BITS=64`, `FUSE_USE_VERSION` по минимальной поддерживаемой libfuse3 (фиксируется в M0).
-- Опции: `TELEGA_FS_BUILD_TESTS` (по умолчанию ON), `TELEGA_FS_E2E` (по умолчанию OFF, E2E нужен тестовый аккаунт и сеть).
+- Определения: `_FILE_OFFSET_BITS=64`, `FUSE_USE_VERSION=310` (API libfuse 3.10, минимальной поддерживаемой версии; зафиксировано в M0).
+- Опции: `TELEGA_FS_BUILD_TESTS` (по умолчанию ON), `TELEGA_FS_E2E` (по умолчанию OFF, E2E нужен тестовый аккаунт и сеть), `TELEGA_FS_BUILD_TOOLS` (по умолчанию OFF, раздел 17.2), `TELEGA_FS_WERROR` (включается пресетом `ci`).
+- Пресеты по умолчанию ищут TDLib в `${sourceDir}/td/tdlib/lib/cmake/Td`, другой путь задаётся через `-DTd_DIR=...`.
+- Санитайзеры включаются флагами компилятора на весь проект, включая зависимости из `FetchContent`, чтобы TSan видел всё, что запускают тесты.
+- Юнит-тесты не линкуются с TDLib: они собираются из библиотеки `telega_core`, а TDLib подключается только к бинарнику `telega-fs`.
 - `CMAKE_EXPORT_COMPILE_COMMANDS=ON` для clangd и clang-tidy.
-- Результат — один бинарник `telega-fs`. Динамически он линкуется только с системными libfuse3, libsodium, libzstd, libssl, libcrypto и libz.
+- Результат — один бинарник `telega-fs`. Динамически он линкуется только с системными libfuse3, libsodium, libzstd, libssl, libcrypto и libz, плюс libc, libm, libstdc++, libgcc_s и части glibc, которые до 2.34 были отдельными библиотеками (libdl, libpthread, librt). В сборках с санитайзерами дополнительно допускаются их рантаймы и libresolv. Это проверяет тест `telega_fs.linkage` (`tools/ci/check-linkage.sh`).
+- Подавления LeakSanitizer лежат в `tools/ci/lsan.supp` и допускаются только для кода, который мы не контролируем (TDLib, зависимости). Каждое правило узкое и с причиной.
 
 ### 15.5 Инструменты
 
-- `.clang-format` и `.clang-tidy` в корне. CI проверяет форматирование и прогоняет clang-tidy на изменённых файлах.
+- `.clang-format` и `.clang-tidy` в корне. CI проверяет форматирование и прогоняет clang-tidy на изменённых файлах. Версия clang-format и clang-tidy — 18 (Ubuntu 24.04).
 
-### 15.6 Раскладка исходников
+### 15.6 CI
+
+- GitHub Actions, `ubuntu-24.04`, запуск на push в `main`, на pull request и вручную.
+- Задача `tdlib` собирает TDLib (clang, Release) и сохраняет установленный префикс в кэш с ключом по полному хешу коммита TDLib, образу раннера и версии рецепта сборки. Остальные задачи кэш только восстанавливают.
+- Группа `concurrency` включает тип события. Отменяются только устаревшие прогоны pull request. Ручной запуск и push в `main` поэтому идут параллельно. Если кэша TDLib ещё нет, его соберут оба, поэтому первый прогон запускается чем-то одним. Первый прогон на пустом кэше TDLib **СЛЕДУЕТ** делать в `main`: кэш, сохранённый в pull request, виден только этому pull request.
+- Раз в неделю по расписанию запускается только задача `tdlib` и восстанавливает кэш: GitHub удаляет кэши, к которым не обращались 7 дней, а пересборка TDLib стоит больше часа.
+- Сборка идёт через ccache, кэш отдельный для каждой пары «пресет, компилятор». Сохраняется он только на push в `main`, pull request его только читает. После прогона в `main` отдельная задача оставляет только самую новую запись ccache каждой пары, чтобы старые не вытесняли кэш TDLib из лимита репозитория. Право `actions: write` есть только у этой задачи, код репозитория она не запускает.
+- Архивы `FetchContent` складываются в общий каталог `TELEGA_FS_DOWNLOAD_DIR` (в пресетах `${sourceDir}/.cache/deps`, общий для всех пресетов). В CI он кэшируется по хешу `cmake/deps.cmake`. Скачанный архив повторно не загружается, если совпал его SHA256.
+- Матрица сборки: `dev` и `ci` (GCC 13 и Clang 18), `asan`, `tsan` (Clang 18), `release` (GCC 13). В каждой: configure, build, `ctest` по пресету.
+- Отдельные задачи: проверка форматирования и clang-tidy по изменённым файлам.
+
+### 15.7 Раскладка исходников
 
 ```
 CMakeLists.txt  CMakePresets.json  cmake/deps.cmake  cmake/sqlite.cmake
@@ -778,6 +794,7 @@ src/cache/    кэш чтения, readahead, staging
 src/fuse/     low-level операции
 tests/        unit/, integration/, e2e/
 tools/bench/  tgfs-sim, tgfs-bench, corpora/ (раздел 17)
+tools/ci/     скрипты CI: форматирование, clang-tidy, проверка линковки
 docs/         SPEC.md, experiments/
 ```
 

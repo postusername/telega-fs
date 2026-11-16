@@ -1,0 +1,3 @@
+#pragma once
+
+#define TELEGA_FS_VERSION "@PROJECT_VERSION@"
