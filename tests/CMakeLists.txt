@@ -2,12 +2,53 @@ include(GoogleTest)
 
 add_executable(telega_unit_tests
     unit/sqlite_test.cpp
-    unit/deps_test.cpp)
+    unit/deps_test.cpp
+    unit/common_test.cpp)
 target_link_libraries(telega_unit_tests PRIVATE telega_core GTest::gtest_main)
 gtest_discover_tests(telega_unit_tests DISCOVERY_MODE PRE_TEST)
 
 target_compile_definitions(telega_unit_tests PRIVATE
     TELEGA_FS_EXPECTED_VERSION="${PROJECT_VERSION}")
+
+# Тесты модулей — отдельные исполняемые файлы, чтобы модуль собирался и проверялся сам по себе.
+function(telega_module_tests name lib)
+    add_executable(${name} ${ARGN})
+    target_link_libraries(${name} PRIVATE ${lib} GTest::gtest_main GTest::gmock)
+    gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST)
+endfunction()
+
+telega_module_tests(telega_app_tests telega_config
+    unit/app/config_test.cpp)
+
+telega_module_tests(telega_crypto_tests telega_crypto
+    unit/crypto/keys_test.cpp
+    unit/crypto/chunk_test.cpp
+    unit/crypto/index_blob_test.cpp
+    unit/crypto/keyring_test.cpp)
+
+telega_module_tests(telega_store_tests telega_store
+    unit/store/local_dir_store_test.cpp)
+
+telega_module_tests(telega_meta_tests telega_meta
+    unit/meta/sqlite_wrapper_test.cpp
+    unit/meta/index_ops_test.cpp
+    unit/meta/meta_store_test.cpp
+    unit/meta/delta_journal_test.cpp
+    unit/meta/state_db_test.cpp)
+
+# Блок ведёт исполнитель commit.
+telega_module_tests(telega_commit_tests telega_commit
+    unit/commit/commit_test.cpp
+    unit/commit/mount_test.cpp
+    unit/commit/fault_test.cpp)
+
+# Блок ведёт исполнитель vfs.
+telega_module_tests(telega_vfs_tests telega_vfs
+    unit/vfs/vfs_test.cpp
+    unit/vfs/vfs_data_test.cpp
+    unit/vfs/vfs_fault_test.cpp
+    unit/vfs/vfs_model_test.cpp
+    unit/vfs/vfs_concurrency_test.cpp)
 
 # Бинарник собирается и запускается во всех пресетах. Это единственный тест, который вызывает
 # TDLib (синхронный td_execute, без потоков TDLib), в том числе под санитайзерами.
@@ -24,3 +65,5 @@ endif()
 add_test(NAME telega_fs.linkage
     COMMAND "${PROJECT_SOURCE_DIR}/tools/ci/check-linkage.sh" ${_linkage_args}
             $<TARGET_FILE:telega-fs>)
+
+add_subdirectory(integration)

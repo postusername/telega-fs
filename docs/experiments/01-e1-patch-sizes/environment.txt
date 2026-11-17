@@ -1,0 +1,42 @@
+--- c4 seed=20261117
+date: 2026-11-17 17:09:22 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733648 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- c4 seed=20261117
+date: 2026-11-17 17:25:02 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733648 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- stress seed=20261117
+date: 2026-11-17 17:47:41 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733648 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- c1 seed=20261117
+date: 2026-11-17 17:48:31 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733648 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- stress seed=20261117
+date: 2026-11-17 23:28:43 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733648 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- c4 seed=20261117
+date: 2026-11-17 23:29:32 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733648 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@

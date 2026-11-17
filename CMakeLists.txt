@@ -38,6 +38,10 @@ target_compile_definitions(telega_options INTERFACE
 
 add_subdirectory(src)
 
+if(TELEGA_FS_BUILD_TOOLS)
+    add_subdirectory(tools/bench)
+endif()
+
 if(TELEGA_FS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

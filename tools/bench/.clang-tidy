@@ -1,0 +1,4 @@
+# Инструменты экспериментов не проходят CI-проверку clang-tidy; здесь отключены только проверки
+# про стиль, которые для одноразового кода шумят. Остальное наследуется от корневого .clang-tidy.
+InheritParentConfig: true
+Checks: '-modernize-avoid-c-arrays,-concurrency-mt-unsafe,-bugprone-exception-escape,-readability-suspicious-call-argument'
