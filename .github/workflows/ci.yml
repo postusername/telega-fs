@@ -162,8 +162,9 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ env.CCACHE_KEY }}-${{ github.sha }}
 
+      # Длинные fsx-прогоны (метка long, десятки минут) только вручную: ctest -L long (SPEC 14).
       - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }} -LE long
 
   # Отдельная задача без checkout: право удалять кэши не получает код из репозитория.
   ccache-cleanup:
@@ -203,7 +204,7 @@ jobs:
     needs: tdlib
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       CC: clang-18
       CXX: clang++-18

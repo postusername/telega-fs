@@ -43,5 +43,25 @@ fi
 
 "$CLANG_TIDY" --version
 # Заголовки генерируются при сборке, поэтому таргеты должны быть хотя бы сконфигурированы.
-"$CLANG_TIDY" -p "$build_dir" --quiet --warnings-as-errors='*' "${files[@]}"
-echo "clang-tidy ok: ${#files[@]} files"
+# Файлы проверяются параллельно (по одному процессу на файл), вывод каждого файла собирается
+# отдельно и печатается целиком, чтобы сообщения разных файлов не перемешивались.
+jobs=${CLANG_TIDY_JOBS:-$(nproc)}
+out_dir=$(mktemp -d)
+trap 'rm -rf "$out_dir"' EXIT
+export CLANG_TIDY build_dir out_dir
+status=0
+printf '%s\0' "${files[@]}" | xargs -0 -n 1 -P "$jobs" sh -c '
+    log="$out_dir/$(printf "%s" "$1" | tr "/" "_").log"
+    if ! "$CLANG_TIDY" -p "$build_dir" --quiet --warnings-as-errors="*" "$1" > "$log" 2>&1; then
+        touch "$log.failed"
+    fi
+' sh || status=$?
+for log in "$out_dir"/*.log; do
+    [[ -s "$log" ]] && cat "$log"
+done
+failed=$(find "$out_dir" -name '*.failed' | wc -l)
+if [[ $failed -ne 0 || $status -ne 0 ]]; then
+    echo "clang-tidy failed: $failed of ${#files[@]} files" >&2
+    exit 1
+fi
+echo "clang-tidy ok: ${#files[@]} files ($jobs jobs)"

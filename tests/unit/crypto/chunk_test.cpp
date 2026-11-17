@@ -325,7 +325,7 @@ TEST_F(ChunkTest, EveryByteOfSmallChunkIsAuthenticated) {
     for (size_t i = 0; i < e.file.size(); ++i) {
         Bytes bad = e.file;
         flip(bad, i);
-        EXPECT_THROW(decrypt_file(bad), CorruptError) << "byte " << i;
+        EXPECT_THROW((void)decrypt_file(bad), CorruptError) << "byte " << i;
     }
 }
 
@@ -341,7 +341,8 @@ TEST_F(ChunkTest, CorruptionInEachSegmentIsDetected) {
              {start, start + len / 2, start + len - 1, start + len, start + len + 15}) {
             Bytes bad = e.file;
             flip(bad, pos);
-            EXPECT_THROW(decrypt_file(bad), CorruptError) << "segment " << seg << " pos " << pos;
+            EXPECT_THROW((void)decrypt_file(bad), CorruptError)
+                << "segment " << seg << " pos " << pos;
             // Порча одного сегмента не мешает читать остальные.
             const uint64_t other = (seg + 1) % 4;
             const SegmentSpan span = chunk_segments_for(size, other * S, 1);
@@ -390,7 +391,7 @@ TEST_F(ChunkTest, WrongKeyChunkIdOrFsUuidFails) {
 
     // Чанк другого id с теми же данными целиком не подставляется вместо нашего.
     const Encrypted foreign = encrypt(data, data.size(), kChunkId + 1);
-    EXPECT_THROW(decrypt_file(foreign.file), CorruptError);
+    EXPECT_THROW((void)decrypt_file(foreign.file), CorruptError);
 }
 
 TEST_F(ChunkTest, SwappedSegmentsFail) {
@@ -400,7 +401,7 @@ TEST_F(ChunkTest, SwappedSegmentsFail) {
     std::swap_ranges(swapped.begin() + static_cast<std::ptrdiff_t>(seg_off(0)),
                      swapped.begin() + static_cast<std::ptrdiff_t>(seg_off(1)),
                      swapped.begin() + static_cast<std::ptrdiff_t>(seg_off(1)));
-    EXPECT_THROW(decrypt_file(swapped), CorruptError);
+    EXPECT_THROW((void)decrypt_file(swapped), CorruptError);
 
     // Сегмент 1, поданный как сегмент 0.
     EXPECT_THROW(decrypt_chunk_segments(k_data, fs_uuid, kChunkId, e.header, 0,
@@ -414,7 +415,7 @@ TEST_F(ChunkTest, TruncationIsDetected) {
 
     // Отрезан хвост последнего сегмента.
     for (const size_t cut : {size_t{1}, size_t{16}, size_t{17}, size_t{100}}) {
-        EXPECT_THROW(decrypt_file(ByteSpan{e.file}.first(e.file.size() - cut)), CorruptError)
+        EXPECT_THROW((void)decrypt_file(ByteSpan{e.file}.first(e.file.size() - cut)), CorruptError)
             << cut;
     }
     // Отрезан последний сегмент целиком: сегменты 0 и 1 — законный частичный диапазон,
@@ -424,7 +425,7 @@ TEST_F(ChunkTest, TruncationIsDetected) {
     // Отрезан последний сегмент и подправлен plain_size: сегмент 1 не был последним (AD).
     Bytes cut = Bytes(e.file.begin(), e.file.begin() + static_cast<std::ptrdiff_t>(seg_off(2)));
     put_u64_le(MutableByteSpan{cut}.subspan(32, 8), 2 * S);
-    EXPECT_THROW(decrypt_file(cut), CorruptError);
+    EXPECT_THROW((void)decrypt_file(cut), CorruptError);
 }
 
 TEST_F(ChunkTest, EncLengthAndRangeChecks) {

@@ -509,7 +509,7 @@ TEST_F(IndexOps, InlineDataAndBudget) {
     const Bytes max_data(64, std::byte{'m'});
     w([&](Db& db) {
         EXPECT_FALSE(set_inline(db, files[0], Bytes(65, std::byte{'x'}), kGen)) << "> inline_max";
-        for (int i = 0; i < 4; ++i) {
+        for (size_t i = 0; i < 4; ++i) {
             EXPECT_TRUE(set_inline(db, files[i], max_data, kGen));
         }
         EXPECT_EQ(inline_total(db), 256);
