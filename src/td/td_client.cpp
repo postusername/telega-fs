@@ -135,8 +135,15 @@ namespace {
 // приёма застрял.
 constexpr std::chrono::milliseconds kCallGrace{2'000};
 
-std::exception_ptr to_exception(TdError error) {
-    return std::make_exception_ptr(TdException(std::move(error)));
+void fail(std::promise<TdOutcome>& promise, TdError error) {
+    promise.set_value(TdOutcome{Json(), std::move(error)});
+}
+
+Json unwrap(TdOutcome outcome) {
+    if (outcome.error) {
+        throw TdException(std::move(*outcome.error));
+    }
+    return std::move(outcome.value);
 }
 
 }  // namespace
@@ -149,7 +156,7 @@ TdClient::TdClient(std::shared_ptr<TdTransport> transport, int client_id)
 TdClient::~TdClient() { fail_all(TdError::make(TdError::kClosed, "client destroyed")); }
 
 TdClient::Submitted TdClient::submit(Json request, std::chrono::milliseconds timeout) {
-    std::future<Json> future;
+    std::future<TdOutcome> future;
     std::optional<TdError> refused;
     uint64_t extra = 0;
     {
@@ -160,14 +167,14 @@ TdClient::Submitted TdClient::submit(Json request, std::chrono::milliseconds tim
             refused = TdError::make(TdError::kClosed, "client closed");
         } else {
             extra = next_extra_++;
-            std::promise<Json> promise;
+            std::promise<TdOutcome> promise;
             future = promise.get_future();
             pending_.emplace(extra, Pending{std::move(promise), Clock::now() + timeout});
         }
     }
     if (refused) {
-        std::promise<Json> failed;
-        failed.set_exception(to_exception(std::move(*refused)));
+        std::promise<TdOutcome> failed;
+        fail(failed, std::move(*refused));
         return {0, failed.get_future()};
     }
     request["@extra"] = extra;
@@ -194,11 +201,13 @@ void TdClient::cancel(uint64_t extra, TdError error) {
         pending_.erase(it);
     }
     timeouts_.fetch_add(1, std::memory_order_relaxed);
-    taken->promise.set_exception(to_exception(std::move(error)));
+    fail(taken->promise, std::move(error));
 }
 
-std::future<Json> TdClient::call_async(Json request, std::chrono::milliseconds timeout) {
-    return submit(std::move(request), timeout).future;
+Json TdFuture::get() { return unwrap(future_.get()); }
+
+TdFuture TdClient::call_async(Json request, std::chrono::milliseconds timeout) {
+    return TdFuture(submit(std::move(request), timeout).future);
 }
 
 Json TdClient::call(Json request, std::chrono::milliseconds timeout) {
@@ -207,7 +216,7 @@ Json TdClient::call(Json request, std::chrono::milliseconds timeout) {
         submitted.future.wait_for(timeout + kCallGrace) == std::future_status::timeout) {
         cancel(submitted.extra, TdError::make(TdError::kTimeout, "request timed out"));
     }
-    return submitted.future.get();
+    return unwrap(submitted.future.get());
 }
 
 Subscription TdClient::subscribe(const std::string& type, Handler handler) {
@@ -246,9 +255,9 @@ void TdClient::on_message(Json message) {
             return;
         }
         if (message.value("@type", std::string{}) == "error") {
-            taken->promise.set_exception(to_exception(TdError::from_json(message)));
+            fail(taken->promise, TdError::from_json(message));
         } else {
-            taken->promise.set_value(std::move(message));
+            taken->promise.set_value(TdOutcome{std::move(message), std::nullopt});
         }
         return;
     }
@@ -307,8 +316,7 @@ void TdClient::expire(Clock::time_point now) {
     }
     timeouts_.fetch_add(expired.size(), std::memory_order_relaxed);
     for (auto& p : expired) {
-        p.promise.set_exception(
-            to_exception(TdError::make(TdError::kTimeout, "request timed out")));
+        fail(p.promise, TdError::make(TdError::kTimeout, "request timed out"));
     }
 }
 
@@ -319,7 +327,7 @@ void TdClient::fail_all(const TdError& reason) {
         taken.swap(pending_);
     }
     for (auto& entry : taken) {
-        entry.second.promise.set_exception(to_exception(reason));
+        fail(entry.second.promise, reason);
     }
 }
 

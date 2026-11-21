@@ -305,8 +305,7 @@ TEST_F(TdClientTest, UpdateRepeatingTheSeededStateIsNotANewState) {
     const Json initial{{"@type", "authorizationStateWaitTdlibParameters"}};
     client->seed_auth_state(initial);
     const auto seeded = client->auth_state();
-    ASSERT_TRUE(seeded.has_value());
-    EXPECT_EQ(seeded->seq, 1U);
+    EXPECT_EQ(seeded.has_value() ? seeded->seq : 0U, 1U);
     transport->push(client->id(),
                     Json{{"@type", "updateAuthorizationState"}, {"authorization_state", initial}});
     transport->push(client->id(), Json{{"@type", "updateAuthorizationState"},

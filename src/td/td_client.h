@@ -66,6 +66,32 @@ struct TdClientStats {
     uint64_t handler_failures = 0;  // обработчиков, бросивших исключение
 };
 
+// Итог запроса: ответ или ошибка. Ошибка передаётся значением, а не через exception_ptr:
+// счётчик ссылок exception_ptr живёт в неинструментированной libstdc++, и TSan видел ложную гонку
+// между потоком приёма и вызывающим (CI M2). Исключение бросается уже в вызывающем потоке.
+struct TdOutcome {
+    Json value;
+    std::optional<TdError> error;
+};
+
+// Будущий ответ call_async. get() бросает TdException в вызывающем потоке.
+class TdFuture {
+  public:
+    TdFuture() = default;
+    explicit TdFuture(std::future<TdOutcome> future) : future_(std::move(future)) {}
+
+    [[nodiscard]] bool valid() const { return future_.valid(); }
+    void wait() const { future_.wait(); }
+    template <class Rep, class Period>
+    [[nodiscard]] std::future_status wait_for(const std::chrono::duration<Rep, Period>& d) const {
+        return future_.wait_for(d);
+    }
+    Json get();
+
+  private:
+    std::future<TdOutcome> future_;
+};
+
 class TdClient {
   public:
     using Handler = std::function<void(const Json&)>;
@@ -84,9 +110,9 @@ class TdClient {
     // Запоздавший после таймаута ответ отбрасывается. Поле @extra запроса перезаписывается.
     Json call(Json request, std::chrono::milliseconds timeout = kDefaultTimeout);
 
-    // То же без блокировки: ошибка лежит в future (get() бросает TdException). Таймаут считается
-    // от отправки, срабатывает в потоке приёма (точность — период опроса TdRuntime).
-    std::future<Json> call_async(Json request, std::chrono::milliseconds timeout = kDefaultTimeout);
+    // То же без блокировки: get() бросает TdException. Таймаут считается от отправки,
+    // срабатывает в потоке приёма (точность — период опроса TdRuntime).
+    TdFuture call_async(Json request, std::chrono::milliseconds timeout = kDefaultTimeout);
 
     // Обработчик для апдейтов типа `type` (например "updateFile"). Апдейты без подписчиков
     // отбрасываются, поэтому подписываться надо ДО действия, которое их вызовет.
@@ -117,12 +143,12 @@ class TdClient {
     friend class TdRuntime;
 
     struct Pending {
-        std::promise<Json> promise;
+        std::promise<TdOutcome> promise;
         Clock::time_point deadline;
     };
     struct Submitted {
         uint64_t extra;
-        std::future<Json> future;
+        std::future<TdOutcome> future;
     };
 
     Submitted submit(Json request, std::chrono::milliseconds timeout);
