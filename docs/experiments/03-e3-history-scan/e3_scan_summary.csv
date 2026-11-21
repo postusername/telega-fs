@@ -1,0 +1,207 @@
+tag,metric,value
+session,ids_scanned,10100
+session,batches,101
+session,pause_ms,2000
+session,scan_total_s,1328.3
+session,batch_ms_median,186
+session,batch_ms_min,119
+session,batch_ms_max,36314
+session,flood_events,33
+session,flood_retry_after_total_s,765
+session,net_errors,0
+session,login_ms,19
+session,get_chat_known_ms,2
+session,expected alive/bot_doc,6101
+session,returned alive/bot_doc,6101
+session,expected alive/bot_idx,160
+session,returned alive/bot_idx,160
+session,expected alive/bot_text,2593
+session,returned alive/bot_text,2593
+session,expected alive/user_text,20
+session,returned alive/user_text,20
+session,expected beyond/-,100
+session,returned beyond/-,0
+session,expected deleted/bot_doc,677
+session,returned deleted/bot_doc,0
+session,expected deleted/bot_text,283
+session,returned deleted/bot_text,0
+session,expected deleted/user_text,5
+session,returned deleted/user_text,0
+session,expected gap/channel_create_assumed,1
+session,returned gap/channel_create_assumed,1
+session,expected service/messagePinMessage,160
+session,returned service/messagePinMessage,160
+session,verdict alive/bot_doc -> ok,6101
+session,verdict alive/bot_idx -> ok,160
+session,verdict alive/bot_text -> ok,2593
+session,verdict alive/user_text -> ok,20
+session,verdict beyond/- -> ok,100
+session,verdict deleted/bot_doc -> ok,677
+session,verdict deleted/bot_text -> ok,283
+session,verdict deleted/user_text -> ok,5
+session,verdict gap/channel_create_assumed -> gap_service,1
+session,verdict service/messagePinMessage -> ok,160
+session,alive_recall,100.00 %
+fresh,ids_scanned,10100
+fresh,batches,101
+fresh,pause_ms,2000
+fresh,scan_total_s,1325.1
+fresh,batch_ms_median,134
+fresh,batch_ms_min,94
+fresh,batch_ms_max,36181
+fresh,flood_events,33
+fresh,flood_retry_after_total_s,763
+fresh,net_errors,0
+fresh,login_ms,14233
+fresh,get_chat_known_ms,55
+fresh,expected alive/bot_doc,6101
+fresh,returned alive/bot_doc,6101
+fresh,expected alive/bot_idx,160
+fresh,returned alive/bot_idx,160
+fresh,expected alive/bot_text,2593
+fresh,returned alive/bot_text,2593
+fresh,expected alive/user_text,20
+fresh,returned alive/user_text,20
+fresh,expected beyond/-,100
+fresh,returned beyond/-,0
+fresh,expected deleted/bot_doc,677
+fresh,returned deleted/bot_doc,0
+fresh,expected deleted/bot_text,283
+fresh,returned deleted/bot_text,0
+fresh,expected deleted/user_text,5
+fresh,returned deleted/user_text,0
+fresh,expected gap/channel_create_assumed,1
+fresh,returned gap/channel_create_assumed,1
+fresh,expected service/messagePinMessage,160
+fresh,returned service/messagePinMessage,160
+fresh,verdict alive/bot_doc -> ok,6101
+fresh,verdict alive/bot_idx -> ok,160
+fresh,verdict alive/bot_text -> ok,2593
+fresh,verdict alive/user_text -> ok,20
+fresh,verdict beyond/- -> ok,100
+fresh,verdict deleted/bot_doc -> ok,677
+fresh,verdict deleted/bot_text -> ok,283
+fresh,verdict deleted/user_text -> ok,5
+fresh,verdict gap/channel_create_assumed -> gap_service,1
+fresh,verdict service/messagePinMessage -> ok,160
+fresh,alive_recall,100.00 %
+session_p15,ids_scanned,3000
+session_p15,batches,30
+session_p15,pause_ms,15000
+session_p15,scan_total_s,435.1
+session_p15,batch_ms_median,143
+session_p15,batch_ms_min,121
+session_p15,batch_ms_max,285
+session_p15,flood_events,0
+session_p15,flood_retry_after_total_s,0
+session_p15,net_errors,0
+session_p15,login_ms,15
+session_p15,get_chat_known_ms,2
+session_p15,expected alive/bot_doc,1570
+session_p15,returned alive/bot_doc,1570
+session_p15,expected alive/bot_idx,47
+session_p15,returned alive/bot_idx,47
+session_p15,expected alive/bot_text,697
+session_p15,returned alive/bot_text,697
+session_p15,expected alive/user_text,20
+session_p15,returned alive/user_text,20
+session_p15,expected deleted/bot_doc,428
+session_p15,returned deleted/bot_doc,0
+session_p15,expected deleted/bot_text,185
+session_p15,returned deleted/bot_text,0
+session_p15,expected deleted/user_text,5
+session_p15,returned deleted/user_text,0
+session_p15,expected gap/channel_create_assumed,1
+session_p15,returned gap/channel_create_assumed,1
+session_p15,expected service/messagePinMessage,47
+session_p15,returned service/messagePinMessage,47
+session_p15,verdict alive/bot_doc -> ok,1570
+session_p15,verdict alive/bot_idx -> ok,47
+session_p15,verdict alive/bot_text -> ok,697
+session_p15,verdict alive/user_text -> ok,20
+session_p15,verdict deleted/bot_doc -> ok,428
+session_p15,verdict deleted/bot_text -> ok,185
+session_p15,verdict deleted/user_text -> ok,5
+session_p15,verdict gap/channel_create_assumed -> gap_service,1
+session_p15,verdict service/messagePinMessage -> ok,47
+session_p15,alive_recall,100.00 %
+session_p10,ids_scanned,3000
+session_p10,batches,30
+session_p10,pause_ms,10000
+session_p10,scan_total_s,290.2
+session_p10,batch_ms_median,152
+session_p10,batch_ms_min,107
+session_p10,batch_ms_max,3261
+session_p10,flood_events,0
+session_p10,flood_retry_after_total_s,0
+session_p10,net_errors,0
+session_p10,login_ms,15
+session_p10,get_chat_known_ms,1
+session_p10,expected alive/bot_doc,1570
+session_p10,returned alive/bot_doc,1570
+session_p10,expected alive/bot_idx,47
+session_p10,returned alive/bot_idx,47
+session_p10,expected alive/bot_text,697
+session_p10,returned alive/bot_text,697
+session_p10,expected alive/user_text,20
+session_p10,returned alive/user_text,20
+session_p10,expected deleted/bot_doc,428
+session_p10,returned deleted/bot_doc,0
+session_p10,expected deleted/bot_text,185
+session_p10,returned deleted/bot_text,0
+session_p10,expected deleted/user_text,5
+session_p10,returned deleted/user_text,0
+session_p10,expected gap/channel_create_assumed,1
+session_p10,returned gap/channel_create_assumed,1
+session_p10,expected service/messagePinMessage,47
+session_p10,returned service/messagePinMessage,47
+session_p10,verdict alive/bot_doc -> ok,1570
+session_p10,verdict alive/bot_idx -> ok,47
+session_p10,verdict alive/bot_text -> ok,697
+session_p10,verdict alive/user_text -> ok,20
+session_p10,verdict deleted/bot_doc -> ok,428
+session_p10,verdict deleted/bot_text -> ok,185
+session_p10,verdict deleted/user_text -> ok,5
+session_p10,verdict gap/channel_create_assumed -> gap_service,1
+session_p10,verdict service/messagePinMessage -> ok,47
+session_p10,alive_recall,100.00 %
+session_p6,ids_scanned,3000
+session_p6,batches,30
+session_p6,pause_ms,6000
+session_p6,scan_total_s,236.5
+session_p6,batch_ms_median,148
+session_p6,batch_ms_min,114
+session_p6,batch_ms_max,20278
+session_p6,flood_events,2
+session_p6,flood_retry_after_total_s,24
+session_p6,net_errors,0
+session_p6,login_ms,21
+session_p6,get_chat_known_ms,2
+session_p6,expected alive/bot_doc,1570
+session_p6,returned alive/bot_doc,1570
+session_p6,expected alive/bot_idx,47
+session_p6,returned alive/bot_idx,47
+session_p6,expected alive/bot_text,697
+session_p6,returned alive/bot_text,697
+session_p6,expected alive/user_text,20
+session_p6,returned alive/user_text,20
+session_p6,expected deleted/bot_doc,428
+session_p6,returned deleted/bot_doc,0
+session_p6,expected deleted/bot_text,185
+session_p6,returned deleted/bot_text,0
+session_p6,expected deleted/user_text,5
+session_p6,returned deleted/user_text,0
+session_p6,expected gap/channel_create_assumed,1
+session_p6,returned gap/channel_create_assumed,1
+session_p6,expected service/messagePinMessage,47
+session_p6,returned service/messagePinMessage,47
+session_p6,verdict alive/bot_doc -> ok,1570
+session_p6,verdict alive/bot_idx -> ok,47
+session_p6,verdict alive/bot_text -> ok,697
+session_p6,verdict alive/user_text -> ok,20
+session_p6,verdict deleted/bot_doc -> ok,428
+session_p6,verdict deleted/bot_text -> ok,185
+session_p6,verdict deleted/user_text -> ok,5
+session_p6,verdict gap/channel_create_assumed -> gap_service,1
+session_p6,verdict service/messagePinMessage -> ok,47
+session_p6,alive_recall,100.00 %

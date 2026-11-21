@@ -16,6 +16,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "../meta/test_util.h"
@@ -55,6 +56,79 @@ class FakeClock final : public Clock {
     time_point now_{std::chrono::hours(1)};
 };
 
+// Store, который прячет голову, как TDLib с кэшем ChannelFull (SPEC 2): несколько ответов
+// read_head подряд возвращают `shown` (nullopt — «нет головы») вместо настоящей головы. Всё
+// остальное пробрасывает. Может ещё закрепить и ответить ошибкой («потерянный ответ» pin).
+class MaskedHeadStore final : public store::Store {
+  public:
+    explicit MaskedHeadStore(store::Store& inner) : inner_(inner) {}
+
+    // Следующие `reads` чтений головы вернут `shown`.
+    void mask_next(int reads, std::optional<store::HeadInfo> shown = std::nullopt) {
+        const std::lock_guard lock(mu_);
+        masked_ = reads;
+        shown_ = std::move(shown);
+    }
+    // После следующего set_head: `reads` чтений вернут `shown`. lose_reply: set_head закрепляет,
+    // но бросает transient («ответ потерян»).
+    void arm_after_pin(int reads, std::optional<store::HeadInfo> shown = std::nullopt,
+                       bool lose_reply = false) {
+        const std::lock_guard lock(mu_);
+        armed_reads_ = reads;
+        armed_shown_ = std::move(shown);
+        lose_reply_ = lose_reply;
+    }
+    [[nodiscard]] int head_reads() const {
+        const std::lock_guard lock(mu_);
+        return head_reads_;
+    }
+
+    store::ChunkRef put_chunk(const std::filesystem::path& f) override {
+        return inner_.put_chunk(f);
+    }
+    void read_range(const store::ChunkRef& r, uint64_t off, std::span<std::byte> out) override {
+        inner_.read_range(r, off, out);
+    }
+    void delete_messages(std::span<const int64_t> ids) override { inner_.delete_messages(ids); }
+    std::optional<store::HeadInfo> read_head() override {
+        {
+            const std::lock_guard lock(mu_);
+            ++head_reads_;
+            if (masked_ > 0) {
+                --masked_;
+                return shown_;
+            }
+        }
+        return inner_.read_head();
+    }
+    Bytes read_index(int64_t id) override { return inner_.read_index(id); }
+    int64_t put_index(const std::filesystem::path& f) override { return inner_.put_index(f); }
+    void set_head(int64_t id, std::optional<int64_t> old) override {
+        inner_.set_head(id, old);
+        bool lose = false;
+        {
+            const std::lock_guard lock(mu_);
+            masked_ = armed_reads_;
+            shown_ = armed_shown_;
+            armed_reads_ = 0;
+            lose = std::exchange(lose_reply_, false);
+        }
+        if (lose) {
+            throw store::StoreError(store::StoreErrorKind::transient, "reply lost");
+        }
+    }
+
+  private:
+    store::Store& inner_;
+    mutable std::mutex mu_;
+    int head_reads_ = 0;
+    int masked_ = 0;
+    std::optional<store::HeadInfo> shown_;
+    int armed_reads_ = 0;
+    std::optional<store::HeadInfo> armed_shown_;
+    bool lose_reply_ = false;
+};
+
 // Дамп без служебных строк: index_history и мёртвые чанки (dead_since_gen не NULL) пишутся
 // уборкой и шагом 8 после коммита и в блоб этого поколения не попадают (SPEC 6.6, 7.4).
 inline std::string normalized(const std::string& dump) {
@@ -89,6 +163,9 @@ class CommitEnv : public ::testing::Test {
         // Снимок пустого индекса — сотни байт, и уже одна дельта превысила бы 0,25 от него.
         // Тесты, которым нужны снимки по размеру, выставляют долю сами.
         commit_config_.checkpoint_ratio = 1e9;
+        // Окно кэша TDLib (SPEC 7.1) в тестах на настоящих часах не ждём: тесты окна идут на
+        // подменённых часах (commit_timing_test.cpp) и выставляют его сами.
+        commit_config_.cas_retry_window = std::chrono::milliseconds{0};
         keyfile_ = tmp_ / "keyfile";
         const crypto::Key k = crypto::Key::random();
         write_file_atomic(keyfile_, k.span());

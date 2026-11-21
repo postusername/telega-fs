@@ -1,8 +1,10 @@
 #pragma once
 
-// Команды CLI init и mount (SPEC 12.3). Разбор аргументов (CLI11) остаётся в main.cpp, здесь —
-// сама работа. Эта библиотека не линкуется с TDLib (SPEC 15.4).
+// Команды CLI login, logout, init и mount (SPEC 12.3). Разбор аргументов (CLI11) остаётся в
+// main.cpp, здесь — сама работа. Эта библиотека не линкуется с TDLib (SPEC 15.4): транспорт
+// TDLib приходит из main через set_transport_factory (app/tg_session.h).
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -16,10 +18,23 @@ struct GlobalArgs {
     bool verbose = false;                         // -v: уровень debug
 };
 
+struct LoginArgs {
+    GlobalArgs global;
+    bool bot = false;  // --bot: токен бота вместо телефона
+    bool qr = false;   // --qr: вход пользователя по QR-коду
+    bool test_dc = false;  // --test-dc: тестовые серверы Telegram (записывается в профиль)
+};
+
+struct LogoutArgs {
+    GlobalArgs global;
+};
+
 struct InitArgs {
     GlobalArgs global;
     std::optional<std::filesystem::path> keyfile;  // --keyfile F
     std::optional<std::string> chunk_size;         // --chunk-size 16M
+    std::optional<int64_t> chat;  // --chat ID: пустой существующий канал
+    std::optional<std::string> title;  // --title T: создать канал (только пользователь)
 };
 
 struct MountArgs {
@@ -33,6 +48,8 @@ struct MountArgs {
 };
 
 // Возвращают код выхода процесса: 0 — успех. Сообщения об ошибках — в stderr.
+int run_login(const LoginArgs& args);
+int run_logout(const LogoutArgs& args);
 int run_init(const InitArgs& args);
 // Без -f возвращается после того, как ФС смонтирована (в родителе); обслуживает ФС
 // дочерний процесс (см. commands.cpp). С -f возвращается после размонтирования.

@@ -1,0 +1,4 @@
+series,kind,size_bytes,parallel,step,attempt,rate_set_per_min,start_utc,end_utc,window_s,planned,launched,ok,flood,net_errors,timeouts,aborted,actual_rate_per_min,bytes_ok,aggregate_mib_s,speed_median_mib_s,speed_min_mib_s,speed_max_mib_s,duration_median_s,duration_max_s,slot_wait_s,flood_retry_s,verdict
+wave-16MiB-p2,wave,16777216,2,0,1,6,2026-11-20T08:41:40.058Z,2026-11-20T08:42:20.057Z,40.0,4,4,4,0,0,0,0,6.00,67108864,1.60,6.22,1.02,18.50,8.50,15.63,0.0,0,clean
+ladder-1KiB-p1,ladder,1024,1,0,1,5,2026-11-20T08:42:40.175Z,2026-11-20T08:44:40.176Z,120.0,10,10,10,0,0,0,0,5.00,10240,0.00,0.01,0.01,0.01,0.17,0.18,0.0,0,clean
+ladder-16MiB-p1,ladder,16777216,1,0,1,1,2026-11-20T08:45:00.285Z,2026-11-20T08:47:00.286Z,120.0,2,2,2,0,0,0,0,1.00,33554432,0.27,12.25,10.00,14.50,1.35,1.60,0.0,0,clean

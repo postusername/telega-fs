@@ -231,8 +231,20 @@ void Vfs::recover() {
 
 // --- фоновые потоки ---
 
+uint32_t Vfs::upload_workers() const {
+    constexpr uint64_t kAlbumFactor = 10;  // SPEC 5: документов в альбоме
+    constexpr uint64_t kMaxAlbumWorkers = 32;
+    const uint64_t base = std::max<uint64_t>(opts_.upload_concurrency, 1);
+    if (!store_.gathers_albums()) {
+        return static_cast<uint32_t>(std::min<uint64_t>(base, UINT32_MAX));
+    }
+    return static_cast<uint32_t>(std::min(kAlbumFactor * base, kMaxAlbumWorkers));
+}
+
 void Vfs::start_threads() {
-    for (uint32_t i = 0; i < opts_.upload_concurrency; ++i) {
+    // Поток на каждый возможный одновременный put_chunk (SPEC 8.1).
+    const uint32_t workers = upload_workers();
+    for (uint32_t i = 0; i < workers; ++i) {
         workers_.emplace_back([this] { worker_loop(); });
     }
     timer_ = std::thread([this] { timer_loop(); });

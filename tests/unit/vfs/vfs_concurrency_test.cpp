@@ -4,8 +4,15 @@
 #include <fcntl.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <filesystem>
+#include <mutex>
+#include <optional>
 #include <random>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -203,6 +210,103 @@ TEST_F(VfsConcurrency, NamespaceChurnWithUploads) {
     env.restart();
     EXPECT_TRUE(env.state->list_dirty_chunks().empty());
     EXPECT_TRUE(env.accounting_ok());
+}
+
+// Store, который считает одновременные put_chunk и держит каждый вызов некоторое время.
+class CountingStore final : public store::Store {
+  public:
+    // expect — сколько одновременных put_chunk ждёт тест. Каждый вызов держится, пока их не
+    // наберётся столько (или не выйдет 2 с): иначе под нагрузкой (ctest -j) потоки не успевали
+    // совпасть по времени, и максимум выходил меньше настоящей параллельности.
+    CountingStore(store::Store& inner, bool albums, int expect)
+        : inner_(inner), albums_(albums), expect_(expect) {}
+    [[nodiscard]] bool gathers_albums() const noexcept override { return albums_; }
+    store::ChunkRef put_chunk(const std::filesystem::path& file) override {
+        {
+            std::unique_lock lock(mu_);
+            ++inflight_;
+            max_inflight_ = std::max(max_inflight_, inflight_);
+            cv_.notify_all();
+            cv_.wait_for(lock, std::chrono::seconds(2), [&] { return inflight_ >= expect_; });
+        }
+        auto ref = inner_.put_chunk(file);
+        {
+            const std::lock_guard lock(mu_);
+            --inflight_;
+        }
+        return ref;
+    }
+    void read_range(const store::ChunkRef& r, uint64_t off, std::span<std::byte> out) override {
+        inner_.read_range(r, off, out);
+    }
+    void delete_messages(std::span<const int64_t> ids) override { inner_.delete_messages(ids); }
+    std::optional<store::HeadInfo> read_head() override { return inner_.read_head(); }
+    Bytes read_index(int64_t id) override { return inner_.read_index(id); }
+    int64_t put_index(const std::filesystem::path& f) override { return inner_.put_index(f); }
+    void set_head(int64_t n, std::optional<int64_t> o) override { inner_.set_head(n, o); }
+    [[nodiscard]] int max_inflight() const {
+        const std::lock_guard lock(mu_);
+        return max_inflight_;
+    }
+
+  private:
+    store::Store& inner_;
+    bool albums_;
+    int expect_;
+    mutable std::mutex mu_;
+    std::condition_variable cv_;
+    int inflight_ = 0;
+    int max_inflight_ = 0;
+};
+
+// SPEC 8.1, «Параллельность загрузок»: одновременных put_chunk ровно upload_concurrency, если
+// Store не собирает альбомы (LocalDirStore); с альбомами — min(10 · upload_concurrency, 32).
+int max_put_chunk_calls(VfsEnv& env, bool albums, uint32_t upload_concurrency, int files,
+                        int expect) {
+    CountingStore counting(*env.store, albums, expect);
+    env.override_store = &counting;
+    VfsOptions o = fast_options();
+    o.upload_concurrency = upload_concurrency;
+    env.start(o);
+    for (int i = 0; i < files; ++i) {
+        const int64_t ino = env.mkfile("f" + std::to_string(i));
+        env.vfs->write(ino, 0, pattern(6000, static_cast<uint64_t>(i) + 1));
+    }
+    env.vfs->flush_all();
+    env.vfs->shutdown();
+    env.override_store = nullptr;
+    return counting.max_inflight();
+}
+
+TEST(VfsUploadParallelism, StoreWithoutAlbumsGetsExactlyUploadConcurrency) {
+    {
+        VfsEnv env;
+        EXPECT_EQ(max_put_chunk_calls(env, false, 1, 12, 1), 1);
+    }
+    {
+        VfsEnv env;
+        EXPECT_EQ(max_put_chunk_calls(env, false, 3, 12, 3), 3);
+    }
+}
+
+TEST(VfsUploadParallelism, LocalDirStoreIsNotAnAlbumStore) {
+    VfsEnv env;
+    EXPECT_FALSE(env.store->gathers_albums());
+}
+
+TEST(VfsUploadParallelism, AlbumStoreGetsTenPerSlotUpToThirtyTwo) {
+    {
+        VfsEnv env;
+        EXPECT_EQ(max_put_chunk_calls(env, true, 2, 40, 20), 20);
+    }
+    {
+        VfsEnv env;
+        EXPECT_EQ(max_put_chunk_calls(env, true, 100, 60, 32), 32);
+    }
+    {
+        VfsEnv env;  // переполнение 10 · upload_concurrency в 32 битах не даёт мало потоков
+        EXPECT_EQ(max_put_chunk_calls(env, true, 0x7fffffffU, 60, 32), 32);
+    }
 }
 
 }  // namespace

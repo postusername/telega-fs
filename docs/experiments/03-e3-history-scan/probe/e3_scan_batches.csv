@@ -1,0 +1,7 @@
+tag,batch,first_id,last_id,ms,non_null,flood_events_so_far
+session,1,1,100,313,81,0
+session,2,101,200,123,64,0
+session,3,201,265,68,0,0
+fresh,1,1,100,107,81,0
+fresh,2,101,200,107,64,0
+fresh,3,201,265,96,0,0

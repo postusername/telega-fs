@@ -1,0 +1,4 @@
+time_utc,series,phase,retry_after_s,wait_s,size_bytes,group,parallel,rate_docs_per_min,step,attempt,offset_in_step_s,launched_jobs_60s,launched_docs_60s,completed_docs_60s,completed_mib_60s,in_flight_jobs,docs_flood_in_job,docs_in_job,what
+2026-11-20T20:26:07.499Z,single-1MiB-p2,step,3,8,1048576,1,2,20,3,1,252.3,20,20,20,20,1,1,1,send 429: Too Many Requests: retry after 3 (retry after 3 s)
+2026-11-20T21:11:31.565Z,album-16MiB-p2,step,8,14,16777216,10,2,25,3,1,285.7,2,20,19,304,0,1,10,send 400: Too Many Requests: retry after 8 (retry after 8 s)
+2026-11-20T22:02:38.935Z,album-1MiB-p2,step,5,11,1048576,10,2,120,4,1,23.0,5,50,40,40,0,10,10,send 429: Too Many Requests: retry after 5 (retry after 5 s)

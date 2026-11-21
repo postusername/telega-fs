@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <toml++/toml.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <charconv>
@@ -184,6 +185,12 @@ const std::unordered_map<std::string_view, ProfileSetter>& profile_setters() {
          }},
         {"send_rate", [](Profile& p, const toml::node& n,
                          std::string_view k) { p.send_rate = node_uint<uint32_t>(n, k); }},
+        {"send_bytes_rate", [](Profile& p, const toml::node& n,
+                               std::string_view k) { p.send_bytes_rate = node_size(n, k); }},
+        {"album_max_doc_size", [](Profile& p, const toml::node& n,
+                                  std::string_view k) { p.album_max_doc_size = node_size(n, k); }},
+        {"read_pause", [](Profile& p, const toml::node& n,
+                          std::string_view k) { p.read_pause = node_duration(n, k); }},
         {"upload_concurrency",
          [](Profile& p, const toml::node& n, std::string_view k) {
              p.upload_concurrency = node_uint<uint32_t>(n, k);
@@ -236,6 +243,12 @@ void validate(const Profile& p) {
     if (p.pack_threshold > p.chunk_size) {
         throw ConfigError(where + "pack_threshold must not exceed chunk_size");
     }
+    if (p.pack_target > p.chunk_size) {
+        throw ConfigError(where + "pack_target must not exceed chunk_size");
+    }
+    if (p.pack_target < 2 * p.pack_threshold) {
+        throw ConfigError(where + "pack_target must be at least 2 * pack_threshold");
+    }
     if (p.inline_max > p.pack_threshold) {
         throw ConfigError(where + "inline_max must not exceed pack_threshold");
     }
@@ -244,6 +257,15 @@ void validate(const Profile& p) {
     }
     if (p.upload_concurrency == 0 || p.download_concurrency == 0) {
         throw ConfigError(where + "concurrency must be at least 1");
+    }
+    if (p.send_rate == 0) {
+        throw ConfigError(where + "send_rate must be at least 1");
+    }
+    if (p.send_bytes_rate == 0) {
+        throw ConfigError(where + "send_bytes_rate must be positive");
+    }
+    if (p.read_pause <= std::chrono::milliseconds{0}) {
+        throw ConfigError(where + "read_pause must be positive");
     }
 }
 
@@ -336,6 +358,16 @@ Config parse_config(std::string_view toml_text, std::string_view source_name) {
                                           std::string(okey.str()) + "'");
                     }
                     it->second(profile, onode, okey.str());
+                }
+                // Значения по умолчанию pack_* зависят от chunk_size (SPEC 6.5: pack_threshold
+                // не больше chunk_size, pack_target не больше chunk_size и не меньше
+                // 2 * pack_threshold). При chunk_size 8MiB это ровно 4MiB и 8MiB из SPEC 12.2.
+                if (!ptable->contains("pack_threshold")) {
+                    profile.pack_threshold =
+                        std::min(profile.pack_threshold, profile.chunk_size / 2);
+                }
+                if (!ptable->contains("pack_target")) {
+                    profile.pack_target = std::min(profile.pack_target, profile.chunk_size);
                 }
                 validate(profile);
                 config.profiles.emplace(profile.name, std::move(profile));

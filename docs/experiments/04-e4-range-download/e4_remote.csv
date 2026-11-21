@@ -1,0 +1,10 @@
+time_utc,variant,path,ok,ms,note,error
+2026-11-19T18:52:40Z,immediate,getRemoteFile,1,0.7,same file_id as upload: yes,
+2026-11-19T18:58:28Z,main,getRemoteFile,1,1.0,"size 536870912, local present",
+2026-11-19T18:58:28Z,main,getMessages,1,207.1,file_id equals getRemoteFile,
+2026-11-19T18:58:53Z,main,download via getMessages file_id,1,199.3,start 64 KiB,
+2026-11-19T18:58:57Z,fresh,login,1,3445.5,,
+2026-11-19T18:58:57Z,fresh,getRemoteFile,1,1.3,"size 0, local none",
+2026-11-19T18:58:57Z,fresh,getMessages,1,70.1,file_id equals getRemoteFile,
+2026-11-19T18:59:21Z,fresh,download via getMessages file_id,1,85.4,start 64 KiB,
+2026-11-19T18:59:38Z,fresh-remote-only,getRemoteFile,1,1.0,"size 0, local none",

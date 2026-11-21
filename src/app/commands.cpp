@@ -23,7 +23,10 @@
 #include <string>
 #include <utility>
 
+#include "app/cli_util.h"
 #include "app/config.h"
+#include "app/telegram_cmds.h"
+#include "app/tg_session.h"
 #include "common/bytes.h"
 #include "crypto/keys.h"
 #include "fuse/frontend.h"
@@ -37,115 +40,6 @@ namespace telega::app {
 namespace fs = std::filesystem;
 
 namespace {
-
-// Ошибка команды: текст для пользователя, процесс завершается с кодом 1.
-class CommandError : public std::runtime_error {
-  public:
-    using std::runtime_error::runtime_error;
-};
-
-// Строка с секретом: затирается при уничтожении. В логи и вывод не попадает.
-class Secret {
-  public:
-    Secret() = default;
-    Secret(const Secret&) = delete;
-    Secret& operator=(const Secret&) = delete;
-    Secret(Secret&&) = delete;
-    Secret& operator=(Secret&&) = delete;
-    ~Secret() { wipe(); }
-
-    void set(std::string value) {
-        wipe();
-        value_ = std::move(value);
-    }
-    [[nodiscard]] const std::string& value() const { return value_; }
-    [[nodiscard]] bool empty() const { return value_.empty(); }
-    void wipe() {
-        if (!value_.empty()) {
-            sodium_memzero(value_.data(), value_.size());
-        }
-        value_.clear();
-    }
-
-  private:
-    std::string value_;
-};
-
-// Прочитать пароль. С терминала — без эха (termios); если stdin не терминал, одну строку
-// из него (для скриптов).
-void read_secret(const char* prompt, Secret& out) {
-    const bool tty = ::isatty(STDIN_FILENO) != 0;
-    termios saved{};
-    bool echo_off = false;
-    if (tty) {
-        if (::tcgetattr(STDIN_FILENO, &saved) == 0) {
-            termios quiet = saved;
-            quiet.c_lflag &= ~static_cast<tcflag_t>(ECHO);
-            echo_off = ::tcsetattr(STDIN_FILENO, TCSAFLUSH, &quiet) == 0;
-        }
-        std::cerr << prompt << std::flush;
-    }
-    std::string line;
-    const bool ok = static_cast<bool>(std::getline(std::cin, line));
-    if (echo_off) {
-        ::tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved);
-    }
-    if (tty) {
-        std::cerr << '\n';
-    }
-    out.set(std::move(line));
-    if (!ok && out.empty()) {
-        throw CommandError("cannot read the passphrase from standard input");
-    }
-}
-
-// Затереть копию пароля в std::optional (best effort).
-void wipe(std::optional<std::string>& s) {
-    if (s && !s->empty()) {
-        sodium_memzero(s->data(), s->size());
-    }
-    s.reset();
-}
-
-fs::path absolute_path(const fs::path& p) { return fs::absolute(p).lexically_normal(); }
-
-struct Loaded {
-    fs::path config_path;
-    Profile profile;
-    ProfilePaths paths;
-};
-
-// Конфиг и профиль для обеих команд. store = "telegram" — M2.
-Loaded load_profile(const GlobalArgs& global) {
-    Loaded l;
-    l.config_path = global.config ? absolute_path(*global.config) : default_config_path();
-    const Config cfg = load_config(l.config_path);
-    l.profile = cfg.profile(global.profile);
-    if (l.profile.store == StoreKind::telegram) {
-        throw CommandError(
-            "Telegram store is implemented in M2; use store = \"local\" with "
-            "local_dir in the profile for now");
-    }
-    if (l.profile.local_dir.empty()) {
-        throw CommandError("profile '" + global.profile +
-                           "' has store = \"local\" but no local_dir");
-    }
-    l.profile.local_dir = absolute_path(l.profile.local_dir);
-    if (!l.profile.keyfile.empty()) {
-        l.profile.keyfile = absolute_path(l.profile.keyfile);
-    }
-    l.paths = profile_paths(global.profile);
-    return l;
-}
-
-void setup_logging(bool verbose, bool color) {
-    std::shared_ptr<spdlog::logger> logger =
-        color ? spdlog::stderr_color_mt("telega-fs") : spdlog::stderr_logger_mt("telega-fs");
-    logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
-    logger->set_level(verbose ? spdlog::level::debug : spdlog::level::info);
-    logger->flush_on(spdlog::level::info);
-    spdlog::set_default_logger(std::move(logger));
-}
 
 // --- init ---
 
@@ -165,6 +59,21 @@ int init_impl(const InitArgs& args) {
     }
     if (opts.chunk_size <= 0) {
         throw CommandError("chunk size must be positive");
+    }
+    // SPEC 6.5: пакет — обычный чанк, и в нём должно умещаться хотя бы два файла порога.
+    if (opts.pack_threshold > opts.chunk_size || opts.pack_target > opts.chunk_size ||
+        opts.pack_target < 2 * opts.pack_threshold) {
+        throw CommandError(
+            "the chunk size conflicts with pack_threshold and pack_target of the profile: "
+            "pack_threshold <= chunk_size, pack_target <= chunk_size and pack_target >= 2 * "
+            "pack_threshold; set them in the profile");
+    }
+    if (p.store == StoreKind::telegram) {
+        return init_telegram(l, args, opts);
+    }
+    if (args.chat || args.title) {
+        throw CommandError("--chat and --title are for store = \"telegram\"; profile '" +
+                           args.global.profile + "' uses a local directory");
     }
 
     fs::path keyfile = p.keyfile;
@@ -215,54 +124,6 @@ int init_impl(const InitArgs& args) {
 }
 
 // --- mount ---
-
-std::string describe(const meta::MountError& e) {
-    using meta::MountErrorKind;
-    switch (e.kind()) {
-        case MountErrorKind::wrong_password:
-            return "wrong passphrase or keyfile";
-        case MountErrorKind::bad_key_source:
-            return std::string("key source mismatch: ") + e.what();
-        case MountErrorKind::no_head:
-            return std::string("the channel has no file system head: ") + e.what() +
-                   " (run `telega-fs init` first)";
-        case MountErrorKind::not_index_blob:
-            return std::string("the channel head is not an index blob: ") + e.what();
-        case MountErrorKind::corrupt:
-            return std::string("the channel data is corrupted or was tampered with: ") + e.what();
-        case MountErrorKind::foreign_fs:
-            return std::string("the channel or local files belong to a different file system: ") +
-                   e.what();
-        case MountErrorKind::local_conflict:
-            return std::string(
-                       "the channel is newer than the local state and there are local "
-                       "changes: ") +
-                   e.what() +
-                   "\n  use --ro to mount read-only without changes, or --discard-local to drop "
-                   "the local changes";
-        case MountErrorKind::rollback:
-            return std::string("the channel head is older than the local state (rolled back?): ") +
-                   e.what() +
-                   "\n  use --ro to mount read-only, or --force-local to upload the local state "
-                   "as the new head";
-        case MountErrorKind::local_state:
-            return std::string("the local state files are damaged or inconsistent: ") + e.what();
-    }
-    return e.what();
-}
-
-std::string describe_exception(const std::exception& e) {
-    if (const auto* me = dynamic_cast<const meta::MountError*>(&e)) {
-        return describe(*me);
-    }
-    if (const auto* se = dynamic_cast<const store::StoreError*>(&e)) {
-        return std::string("channel storage error: ") + se->what();
-    }
-    if (const auto* ce = dynamic_cast<const crypto::CorruptError*>(&e)) {
-        return std::string("file system data is corrupted: ") + ce->what();
-    }
-    return e.what();
-}
 
 // Сообщает родителю (через pipe), что ФС смонтирована или почему нет. Без fork (-f) пустой.
 class Ready {
@@ -345,6 +206,8 @@ class Teardown {
                     spdlog::error("final commit failed: {}", e.what());
                     failed_ = true;
                 }
+                // Коммитер остановлен: Vfs больше не опрашивается (SPEC 7.1, отсрочка коммита).
+                fs->committer().set_upload_probe({});
             }
             spdlog::info("unmounted");
         });
@@ -362,7 +225,11 @@ int serve(MountContext& ctx, Ready& ready) {
     crypto::init();
     const Profile& p = ctx.loaded.profile;
 
-    std::unique_ptr<store::LocalDirStore> store;
+    // Порядок объявления важен: объекты уничтожаются в обратном порядке. Сначала Vfs и
+    // MountedFs, затем хранилище, и последним клиент TDLib (close до остановки TdRuntime).
+    std::unique_ptr<TelegramBackend> telegram;
+    std::unique_ptr<store::LocalDirStore> local_store;
+    store::Store* store = nullptr;
     std::unique_ptr<meta::MountedFs> mounted;
     std::unique_ptr<vfs::Vfs> vfs;
     Teardown teardown;
@@ -375,17 +242,40 @@ int serve(MountContext& ctx, Ready& ready) {
         wipe(mo.key.passphrase);
     };
     try {
-        store = std::make_unique<store::LocalDirStore>(p.local_dir);
-        try {
-            store->set_faults(store::fault_rules_from_env());
-        } catch (const std::invalid_argument& e) {
-            throw CommandError(std::string("invalid ") + store::kFaultsEnvVar + ": " + e.what());
+        if (p.store == StoreKind::telegram) {
+            // SPEC 7.2, шаги 1–3: keyring (пароль), TDLib, getChat. Без интерактива: если
+            // сессия не авторизована, подсказка запустить login.
+            if (!p.chat_id) {
+                throw CommandError("profile '" + ctx.args.global.profile +
+                                   "' has no chat_id: run `telega-fs init` first");
+            }
+            const crypto::KeyringFile keyring = load_keyring_for(ctx.loaded, ctx.args.global);
+            const crypto::Key tdlib_key = unlock_tdlib_key_or_throw(keyring, ctx.key);
+            telegram = std::make_unique<TelegramBackend>(ctx.loaded, tdlib_key);
+            telegram->connect();
+            telegram->open_store(*p.chat_id);
+            store = &telegram->store();
+            spdlog::info("Telegram session ready, channel {}", *p.chat_id);
+        } else {
+            local_store = std::make_unique<store::LocalDirStore>(p.local_dir);
+            try {
+                local_store->set_faults(store::fault_rules_from_env());
+            } catch (const std::invalid_argument& e) {
+                throw CommandError(std::string("invalid ") + store::kFaultsEnvVar + ": " +
+                                   e.what());
+            }
+            store = local_store.get();
         }
 
         mo.key = ctx.key;
         mo.read_only = ctx.args.read_only;
         mo.discard_local = ctx.args.discard_local;
         mo.force_local = ctx.args.force_local;
+        if (p.store == StoreKind::telegram) {
+            // Кэш TDLib может до минуты скрывать голову после init или размонтирования.
+            mo.stale_head_window = mo.commit.cas_retry_window;
+            mo.stale_head_period = mo.commit.cas_retry_period;
+        }
         mo.commit.commit_interval = p.commit_interval;
         mo.commit.commit_every_chunks = p.commit_every_chunks;
         mo.commit.patch_take_rows = p.patch_take_rows;
@@ -410,6 +300,11 @@ int serve(MountContext& ctx, Ready& ready) {
         vfs = std::make_unique<vfs::Vfs>(
             mounted->meta(), mounted->state(), mounted->store(), mounted->committer(),
             mounted->keys(), vfs::VfsPaths{ctx.loaded.paths.staging(), ctx.loaded.paths.tmp()}, vo);
+        // SPEC 7.1: пока очередь заливки не пуста, коммит по commit_interval откладывается.
+        mounted->committer().set_upload_probe([v = vfs.get()] {
+            const vfs::VfsStatus st = v->status();
+            return st.queued + st.uploading > 0;
+        });
 
         std::string mount_options;
         for (const std::string& o : ctx.args.options) {
@@ -518,6 +413,10 @@ int mount_impl(const MountArgs& args) {
     std::error_code ec;
     if (!fs::is_directory(ctx.args.mountpoint, ec)) {
         throw CommandError("mount point " + ctx.args.mountpoint.string() + " is not a directory");
+    }
+    if (ctx.loaded.profile.store == StoreKind::telegram) {
+        // Раньше пароля: без keyring спрашивать нечего.
+        (void)load_keyring_for(ctx.loaded, args.global);
     }
     ensure_profile_dirs(ctx.loaded.paths);
     // Lock берётся до fork и остаётся у процесса, который обслуживает ФС: при fork дескриптор

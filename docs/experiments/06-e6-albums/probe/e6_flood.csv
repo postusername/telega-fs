@@ -1,0 +1,1 @@
+time_utc,series,phase,retry_after_s,wait_s,size_bytes,group,parallel,rate_docs_per_min,step,attempt,offset_in_step_s,launched_jobs_60s,launched_docs_60s,completed_docs_60s,completed_mib_60s,in_flight_jobs,docs_flood_in_job,docs_in_job,what

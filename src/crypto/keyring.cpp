@@ -1,6 +1,7 @@
 #include "crypto/keyring.h"
 
 #include <algorithm>
+#include <stdexcept>
 
 #include "common/files.h"
 #include "crypto/detail.h"
@@ -33,6 +34,24 @@ KeyringFile make_keyring(const FsUuid& fs_uuid, const KdfParams& kdf, const Key&
                        .kdf = kdf,
                        .wrapped_master = wrap_key(kek, master),
                        .wrapped_tdlib = wrap_key(kek, tdlib_db)};
+}
+
+bool keyring_has_fs(const KeyringFile& keyring) { return !detail::all_zero(keyring.fs_uuid); }
+
+KeyringFile make_keyring_without_fs(const KdfParams& kdf, const Key& kek, const Key& tdlib_db) {
+    return KeyringFile{
+        .fs_uuid = {}, .kdf = kdf, .wrapped_master = {}, .wrapped_tdlib = wrap_key(kek, tdlib_db)};
+}
+
+KeyringFile attach_fs(const KeyringFile& keyring, const FsUuid& fs_uuid, const Key& kek,
+                      const Key& master) {
+    if (detail::all_zero(fs_uuid)) {
+        throw std::invalid_argument("keyring: fs_uuid must not be zero");
+    }
+    KeyringFile out = keyring;
+    out.fs_uuid = fs_uuid;
+    out.wrapped_master = wrap_key(kek, master);
+    return out;
 }
 
 std::array<std::byte, kKeyringSize> serialize_keyring(const KeyringFile& keyring) {
@@ -76,6 +95,10 @@ KeyringFile parse_keyring(ByteSpan raw) {
                 keyring.wrapped_master.begin());
     std::copy_n(raw.begin() + kOffWrappedTdlib, keyring.wrapped_tdlib.size(),
                 keyring.wrapped_tdlib.begin());
+    if (detail::all_zero(keyring.fs_uuid) != detail::all_zero(keyring.wrapped_master)) {
+        // Keyring без ФС — оба поля нулевые (SPEC 11); одно из двух — порча.
+        throw CorruptError("keyring: fs_uuid and wrapped_master disagree");
+    }
     return keyring;
 }
 
@@ -87,7 +110,14 @@ KeyringFile load_keyring(const std::filesystem::path& path) {
     return parse_keyring(read_file(path));
 }
 
+std::optional<Key> unlock_tdlib_key(const KeyringFile& keyring, const Key& kek) {
+    return unwrap_key(kek, keyring.wrapped_tdlib);
+}
+
 std::optional<UnlockedKeys> unlock_keyring(const KeyringFile& keyring, const Key& kek) {
+    if (!keyring_has_fs(keyring)) {
+        throw std::logic_error("keyring without a file system has no master key");
+    }
     // Неверный пароль или keyfile распознаётся по wrapped_master (SPEC 11).
     std::optional<Key> master = unwrap_key(kek, keyring.wrapped_master);
     if (!master) {

@@ -21,6 +21,11 @@ struct KeyringFile {
     bool operator==(const KeyringFile&) const = default;
 };
 
+// Keyring без ФС (SPEC 11, «Keyring до init»): fs_uuid и wrapped_master нулевые, KDF и
+// wrapped_tdlib настоящие. Его создаёт login, init дописывает ФС, монтирование на новой машине
+// разворачивает master_key из головы канала.
+[[nodiscard]] bool keyring_has_fs(const KeyringFile& keyring);
+
 struct UnlockedKeys {
     Key master;
     Key tdlib_db;
@@ -37,7 +42,20 @@ KeyringFile parse_keyring(ByteSpan raw);  // CorruptError при неверно�
 void save_keyring(const std::filesystem::path& path, const KeyringFile& keyring);
 KeyringFile load_keyring(const std::filesystem::path& path);
 
-// nullopt — неверный пароль или keyfile.
+// Keyring без ФС: нулевые fs_uuid и wrapped_master, wrapped_tdlib под kek.
+KeyringFile make_keyring_without_fs(const KdfParams& kdf, const Key& kek, const Key& tdlib_db);
+
+// Keyring с ФС: тот же KDF и wrapped_tdlib, что у keyring без ФС, плюс fs_uuid и master под kek
+// (init, монтирование на новой машине). Нулевой fs_uuid — std::invalid_argument.
+KeyringFile attach_fs(const KeyringFile& keyring, const FsUuid& fs_uuid, const Key& kek,
+                      const Key& master);
+
+// nullopt — неверный пароль или keyfile. keyring должен быть с ФС (keyring_has_fs), иначе
+// std::logic_error: для keyring без ФС есть unlock_tdlib_key.
 std::optional<UnlockedKeys> unlock_keyring(const KeyringFile& keyring, const Key& kek);
+
+// Проверка пароля по wrapped_tdlib (работает и для keyring без ФС). nullopt — неверный пароль
+// или keyfile.
+std::optional<Key> unlock_tdlib_key(const KeyringFile& keyring, const Key& kek);
 
 }  // namespace telega::crypto

@@ -113,8 +113,9 @@ struct Gen {
     }
 
     // Файл «в пакете» (SPEC 6.5): один экстент idx = 0 на общий чанк kind = 2 с chunk_off.
-    void add_to_pack(meta::Db& db, int64_t ino) {
-        const int64_t size = rng.log_uniform(inline_max_param + 1, pack_threshold);
+    void add_to_pack(meta::Db& db, int64_t ino, int64_t given = -1) {
+        const int64_t size =
+            given >= 0 ? given : rng.log_uniform(inline_max_param + 1, pack_threshold);
         if (pack_used + size > pack_target) {
             close_pack(db);
         }
@@ -124,8 +125,9 @@ struct Gen {
         ++out.pack_files;
     }
 
-    void add_positional(meta::Db& db, int64_t ino) {
-        const int64_t size = rng.log_uniform(pack_threshold + 1, p.positional_max);
+    void add_positional(meta::Db& db, int64_t ino, int64_t given = -1) {
+        const int64_t size =
+            given >= 0 ? given : rng.log_uniform(pack_threshold + 1, p.positional_max);
         const int64_t positions = (size + chunk_size - 1) / chunk_size;
         for (int64_t idx = 0; idx < positions; ++idx) {
             const int64_t plain = std::min(chunk_size, size - idx * chunk_size);
@@ -139,13 +141,17 @@ struct Gen {
         ++out.positional_files;
     }
 
-    void add_inline(meta::Db& db, int64_t ino) {
+    // given >= 0 — размер задан (E8), idx — номер файла для источника содержимого.
+    void add_inline(meta::Db& db, int64_t ino, int64_t given = -1, int64_t idx = 0) {
         const int64_t len =
-            p.inline_min +
-            static_cast<int64_t>(rng.below(static_cast<uint64_t>(p.inline_max - p.inline_min + 1)));
-        if (!meta::set_inline(db, ino, inline_content(rng, len), base_gen)) {
+            given >= 0 ? given
+                       : p.inline_min + static_cast<int64_t>(rng.below(static_cast<uint64_t>(
+                                            p.inline_max - p.inline_min + 1)));
+        const Bytes data =
+            given >= 0 && p.content ? p.content(rng, idx, len) : inline_content(rng, len);
+        if (!meta::set_inline(db, ino, data, base_gen)) {
             ++out.inline_overflow;  // бюджет исчерпан: как в SPEC 6.5, файл идёт в пакет
-            add_to_pack(db, ino);
+            add_to_pack(db, ino, given);
             return;
         }
         set_size(db, ino, len);
@@ -216,9 +222,26 @@ C4Layout plan_c4_layout(int64_t inodes, int64_t fanout) {
     }
 }
 
+C4Layout plan_c4_layout_for_files(int64_t files, int64_t fanout) {
+    if (files < fanout * 2 || fanout < 2) {
+        throw std::invalid_argument("c4: too few files for the fanout");
+    }
+    int64_t leaves = (files + fanout - 1) / fanout;
+    leaves = std::max<int64_t>(leaves, 2);
+    const int64_t inodes = files + leaves + upper_dirs(leaves, fanout);
+    C4Layout layout = plan_c4_layout(inodes, fanout);
+    if (layout.files != files) {
+        throw std::logic_error("c4: layout does not fit the requested number of files");
+    }
+    return layout;
+}
+
 C4Index generate_c4(meta::MetaStore& meta, const C4Params& params, int64_t base_gen,
                     const std::function<void(int64_t)>& progress) {
-    const C4Layout layout = plan_c4_layout(params.inodes, params.fanout);
+    const C4Layout layout =
+        params.sizes != nullptr
+            ? plan_c4_layout_for_files(static_cast<int64_t>(params.sizes->size()), params.fanout)
+            : plan_c4_layout(params.inodes, params.fanout);
     Gen g{params, base_gen};
     const meta::IndexParams ip = meta.read([](meta::Db& db) { return meta::read_params(db); });
     g.pack_threshold = ip.pack_threshold;
@@ -270,6 +293,19 @@ C4Index generate_c4(meta::MetaStore& meta, const C4Params& params, int64_t base_
                     hex_name('f', i, 8) + kExtensions[g.rng.below(std::size(kExtensions))];
                 const int64_t ino = Gen::add_file_inode(db, parent, name, ++seq);
                 g.out.file_inos.push_back(ino);
+                if (params.sizes != nullptr) {
+                    const int64_t size = (*params.sizes)[static_cast<size_t>(i)];
+                    if (size == 0) {
+                        ++g.out.empty_files;
+                    } else if (size <= g.inline_max_param) {
+                        g.add_inline(db, ino, size, i);
+                    } else if (size <= g.pack_threshold) {
+                        g.add_to_pack(db, ino, size);
+                    } else {
+                        g.add_positional(db, ino, size);
+                    }
+                    continue;
+                }
                 const auto draw = static_cast<int>(g.rng.below(1000));
                 if (draw < params.pack_permille) {
                     g.add_to_pack(db, ino);

@@ -3,6 +3,7 @@
 // init (SPEC 12.3, 11): новая ФС в пустом канале. Ключи, keyring, пустой индекс,
 // state.sqlite и первый коммит — снимок поколения 1, закреплённый как голова.
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -25,11 +26,17 @@ struct InitOptions {
     std::optional<crypto::KdfParams> kdf;
 
     // Неизменные после init (SPEC 12.2).
-    int64_t chunk_size = 16LL << 20;
+    int64_t chunk_size = 8LL << 20;
     int64_t inline_max = 4LL << 10;
     int64_t inline_budget = 16LL << 20;
-    int64_t pack_threshold = 1LL << 20;
-    int64_t pack_target = 16LL << 20;
+    int64_t pack_threshold = 4LL << 20;
+    int64_t pack_target = 8LL << 20;
+
+    // Кэш TDLib (SPEC 2, 12.3): при повторе прерванного init и при откате после сбоя `set_head`
+    // пустая голова принимается как «канала нет» только после этого окна; чтение повторяется
+    // раз в `stale_head_period`. 0 — одно чтение (хранилища без кэша).
+    std::chrono::milliseconds stale_head_window{0};
+    std::chrono::milliseconds stale_head_period{10'000};
 };
 
 struct InitResult {
@@ -37,11 +44,24 @@ struct InitResult {
     int64_t head_msg_id = 0;
 };
 
-// Канал не пуст (read_head() != nullopt) или в профиле уже есть keyring, index.sqlite или
-// state.sqlite — InitError. Если первый коммит не удался и в канале по-прежнему нет головы,
-// созданные локальные файлы удаляются. Если голова там уже есть (pin состоялся, а упал
-// шаг 8) или проверить не удалось, keyring и базы остаются: канал закрепляет наш блоб, и
-// монтирование доделает коммит (SPEC 7.2, G_r = G_l + 1).
+// Состояние профиля перед init (SPEC 12.3). Нет keyring или он без ФС, а базы есть, либо keyring
+// с ФС, уже закоммиченной (base_generation > 0), — InitError.
+enum class InitProfileState : uint8_t {
+    fresh,  // keyring нет или он без ФС (login до init), баз нет
+    resumable,  // keyring с ФС, но ФС ни разу не закоммичена: прерванный init
+};
+InitProfileState inspect_profile_for_init(const FsPaths& paths);
+
+// Канал не пуст (read_head() != nullopt) или профиль не годится для init (см.
+// inspect_profile_for_init) — InitError. Прерванный init (keyring с ФС, base_generation = 0)
+// повторяется: пароль проверяется по wrapped_tdlib, голова канала должна быть пуста всё окно
+// stale_head_window, базы пересоздаются, ФС генерируется заново (новые fs_uuid и master_key),
+// wrapped_tdlib сохраняется.
+// Если первый коммит не удался: блоб не залит или голова пуста всё окно — созданные локальные
+// файлы удаляются (keyring возвращается как был). Если голова — наш блоб (pin состоялся, а
+// упал set_head или шаг 8), init считается успешным: keyring и базы остаются, монтирование
+// доделает коммит (SPEC 7.2, G_r = G_l + 1). Чужая голова или сбой проверки — файлы остаются,
+// ошибка пробрасывается.
 // Ошибки Store пробрасываются как есть (или CommitError из коммита).
 InitResult init_fs(store::Store& store, const FsPaths& paths, const InitOptions& options);
 

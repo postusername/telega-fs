@@ -18,7 +18,12 @@ function(telega_module_tests name lib)
 endfunction()
 
 telega_module_tests(telega_app_tests telega_config
-    unit/app/config_test.cpp)
+    unit/app/config_test.cpp
+    unit/app/config_edit_test.cpp)
+
+# Команды login, logout, init, mount для store = "telegram" на фейковом транспорте TDLib.
+telega_module_tests(telega_app_cmd_tests telega_core
+    unit/app/telegram_cmds_test.cpp)
 
 telega_module_tests(telega_crypto_tests telega_crypto
     unit/crypto/keys_test.cpp
@@ -26,8 +31,20 @@ telega_module_tests(telega_crypto_tests telega_crypto
     unit/crypto/index_blob_test.cpp
     unit/crypto/keyring_test.cpp)
 
+# td: TdClient, TdRuntime, трекер отправки, авторизация на фейковом транспорте, без TDLib.
+telega_module_tests(telega_td_tests telega_td
+    unit/td/td_error_test.cpp
+    unit/td/td_client_test.cpp
+    unit/td/send_tracker_test.cpp
+    unit/td/auth_test.cpp)
+
 telega_module_tests(telega_store_tests telega_store
     unit/store/local_dir_store_test.cpp)
+
+# Блок ведёт исполнитель TelegramStore.
+telega_module_tests(telega_tgstore_tests telega_tgstore
+    unit/store/rate_limiter_test.cpp
+    unit/store/telegram_store_test.cpp)
 
 telega_module_tests(telega_meta_tests telega_meta
     unit/meta/sqlite_wrapper_test.cpp
@@ -40,6 +57,8 @@ telega_module_tests(telega_meta_tests telega_meta
 telega_module_tests(telega_commit_tests telega_commit
     unit/commit/commit_test.cpp
     unit/commit/mount_test.cpp
+    unit/commit/keyring_flow_test.cpp
+    unit/commit/commit_timing_test.cpp
     unit/commit/fault_test.cpp)
 
 # Блок ведёт исполнитель vfs.
@@ -49,6 +68,11 @@ telega_module_tests(telega_vfs_tests telega_vfs
     unit/vfs/vfs_fault_test.cpp
     unit/vfs/vfs_model_test.cpp
     unit/vfs/vfs_concurrency_test.cpp)
+
+# Vfs поверх TelegramStore на фейковом транспорте TDLib.
+telega_module_tests(telega_vfs_tg_tests telega_vfs
+    unit/vfs/vfs_telegram_test.cpp)
+target_link_libraries(telega_vfs_tg_tests PRIVATE telega_tgstore)
 
 # Бинарник собирается и запускается во всех пресетах. Это единственный тест, который вызывает
 # TDLib (синхронный td_execute, без потоков TDLib), в том числе под санитайзерами.
@@ -67,3 +91,7 @@ add_test(NAME telega_fs.linkage
             $<TARGET_FILE:telega-fs>)
 
 add_subdirectory(integration)
+
+if(TELEGA_FS_E2E)
+    add_subdirectory(e2e)
+endif()

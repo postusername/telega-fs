@@ -156,12 +156,13 @@ class LostPinReplyStore final : public store::Store {
     store::Store& inner_;
 };
 
-// Ошибка после pin: в канале закреплён наш блоб, keyring и базы удалять нельзя. Монтирование
-// узнаёт свой снимок и доделывает шаг 8.
+// Ошибка после pin: в канале закреплён наш блоб, keyring и базы удалять нельзя. Это успех init:
+// монтирование узнаёт свой снимок и доделывает шаг 8.
 TEST_F(Commit, InitFailureAfterPinKeepsLocalStateAndMountResumesIt) {
     LostPinReplyStore lossy{*store_};
-    EXPECT_THROW(init_fs(lossy, a_, init_options()), CommitError);
-    ASSERT_TRUE(store_->read_head().has_value());  // pin состоялся
+    const InitResult r = init_fs(lossy, a_, init_options());
+    const auto head = test::must(store_->read_head());  // pin состоялся
+    EXPECT_EQ(r.head_msg_id, head.msg_id);
     EXPECT_TRUE(std::filesystem::exists(a_.keyring()));
     EXPECT_TRUE(std::filesystem::exists(a_.index_db()));
     EXPECT_TRUE(std::filesystem::exists(a_.state_db()));
@@ -171,11 +172,46 @@ TEST_F(Commit, InitFailureAfterPinKeepsLocalStateAndMountResumesIt) {
     EXPECT_EQ(fs->report().situation, MountSituation::same_generation);
     EXPECT_EQ(state_int(*fs, state_key::base_generation), 1);
     mkfile(*fs, "after-init");
-    const auto r = fs->committer().commit();
-    ASSERT_TRUE(r.committed);
-    EXPECT_EQ(r.metrics.generation, 2U);
+    const auto r2 = fs->committer().commit();
+    ASSERT_TRUE(r2.committed);
+    EXPECT_EQ(r2.metrics.generation, 2U);
     EXPECT_EQ(remote_state(), normalized(test::dump_of(*fs)));
     fs->unmount();
+}
+
+// set_head упал, а следующее чтение головы возвращает кэш TDLib («нет головы»): одно чтение
+// приняло бы это за «pin не прошёл» и откатило init вместе с ключом к закреплённому блобу.
+TEST_F(Commit, InitRollbackDoesNotTrustASingleStaleHeadRead) {
+    test::MaskedHeadStore masked{*store_};
+    masked.arm_after_pin(3, std::nullopt, /*lose_reply=*/true);
+    InitOptions o = init_options();
+    o.stale_head_window = 200ms;
+    o.stale_head_period = 10ms;
+    const InitResult r = init_fs(masked, a_, o);
+    EXPECT_GE(masked.head_reads(), 4);
+    EXPECT_EQ(r.head_msg_id, test::must(store_->read_head()).msg_id);
+    EXPECT_TRUE(std::filesystem::exists(a_.keyring()));
+    EXPECT_TRUE(std::filesystem::exists(a_.state_db()));
+    auto fs = mount(a_);
+    EXPECT_TRUE(fs->report().resumed_commit);
+    fs->unmount();
+}
+
+// Pin не прошёл (голова пуста всё окно): откат, а залитый блоб удаляется.
+TEST_F(Commit, InitRollbackAfterWindowRemovesFilesAndTheUnpinnedBlob) {
+    test::MaskedHeadStore masked{*store_};
+    InitOptions o = init_options();
+    o.stale_head_window = 40ms;
+    o.stale_head_period = 10ms;
+    fault_next(StoreOp::set_head, FaultAction::permanent);
+    EXPECT_THROW(init_fs(masked, a_, o), CommitError);
+    EXPECT_FALSE(std::filesystem::exists(a_.keyring()));
+    EXPECT_FALSE(std::filesystem::exists(a_.index_db()));
+    EXPECT_FALSE(std::filesystem::exists(a_.state_db()));
+    EXPECT_TRUE(store_->list_messages().empty());
+    EXPECT_GE(masked.head_reads(), 3);
+    store_->set_faults({});
+    init();  // и init повторяется
 }
 
 TEST_F(Commit, InitWithPassphrase) {

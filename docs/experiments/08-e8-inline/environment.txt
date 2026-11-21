@@ -1,0 +1,49 @@
+--- index seed=20261121 tag=c1
+date: 2026-11-21 03:25:02 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733632 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- index seed=20261121 tag=c4-100000
+date: 2026-11-21 03:25:13 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733632 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- index seed=20261121 tag=c2
+date: 2026-11-21 03:27:38 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733632 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- index seed=20261121 tag=c4-1000000
+date: 2026-11-21 03:35:26 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733632 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- index seed=20261121 tag=text-c1
+date: 2026-11-21 03:49:46 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733632 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- index seed=20261121 tag=text-c4-100000
+date: 2026-11-21 03:49:58 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733632 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@
+--- index seed=20261121 tag=text-c2
+date: 2026-11-21 03:52:05 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733632 kB
+work_dir_fs: /dev/nvme0n1p5[/@] btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=299,subvol=/@

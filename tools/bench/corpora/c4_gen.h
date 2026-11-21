@@ -24,6 +24,16 @@ struct C4Params {
     int64_t inline_min = 16;  // размер инлайн-файла, равномерно [min, max]
     int64_t inline_max = 600;  // 50 000 файлов × ~308 байт укладываются в inline_budget 16 МиБ
     int64_t positional_max = int64_t{128} << 20U;  // размер позиционного: от pack_threshold
+
+    // E8 (SPEC 17.11): если sizes задан, размеры файлов берутся оттуда по порядку, а класс
+    // хранения выбирается по порогам индекса, как при запечатывании (SPEC 6.5): инлайн, пока
+    // size <= inline_max и хватает бюджета (иначе пакет), пакет при size <= pack_threshold,
+    // иначе позиционный. Пустые файлы остаются без данных. Число файлов равно sizes->size(),
+    // inodes пересчитывается под раскладку (пул каталогов по fanout), pack_permille и
+    // inline_permille не используются.
+    const std::vector<int64_t>* sizes = nullptr;
+    // Содержимое инлайн-файла (индекс файла, размер); по умолчанию — алфавит base64.
+    std::function<Bytes(Rng&, int64_t, int64_t)> content;
 };
 
 struct C4Dir {
@@ -41,6 +51,7 @@ struct C4Index {
     int64_t inline_files = 0;
     int64_t positional_files = 0;
     int64_t inline_overflow = 0;  // инлайн-файлы, не влезшие в бюджет и ушедшие в пакеты
+    int64_t empty_files = 0;  // файлы нулевого размера (только при C4Params::sizes)
     int64_t pack_chunks = 0;
     int64_t positional_chunks = 0;
     int64_t extents = 0;
@@ -60,6 +71,9 @@ struct C4Layout {
 // Подобрать раскладку так, чтобы всего было ровно inodes (каталоги + файлы), в каждом каталоге
 // не больше fanout записей: листья — каталоги с файлами, выше — каталоги с подкаталогами.
 C4Layout plan_c4_layout(int64_t inodes, int64_t fanout);
+
+// Раскладка для заданного числа файлов (inodes = files + каталоги), см. plan_c4_layout.
+C4Layout plan_c4_layout_for_files(int64_t files, int64_t fanout);
 
 // Вставить C4 в индекс прямо через index_ops (без Vfs и без данных). Индекс должен быть
 // пустым (только корень). base_gen — поколение для учёта чанков (index_ops). progress, если

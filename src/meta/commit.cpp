@@ -209,15 +209,27 @@ bool CommitManager::take_due() const {
 }
 
 void CommitManager::chunk_uploaded() {
-    bool due = false;
     {
         const std::lock_guard lock(mu_);
         ++chunks_since_commit_;
-        due = chunks_since_commit_ >= config_.commit_every_chunks;
+        reprobe_.store(true);  // очередь могла опустеть: пробу не ограничивать по частоте
     }
-    if (due) {
-        cv_.notify_all();
+    // Всегда будим: очередь могла опустеть, и отложенный коммит по интервалу пора делать.
+    cv_.notify_all();
+}
+
+void CommitManager::set_upload_probe(std::function<bool()> busy) {
+    {
+        const std::lock_guard lock(probe_mu_);
+        upload_probe_ = std::move(busy);
     }
+    reprobe_.store(true);
+    cv_.notify_all();
+}
+
+bool CommitManager::uploads_busy() {
+    const std::lock_guard lock(probe_mu_);
+    return upload_probe_ && upload_probe_();
 }
 
 uint64_t CommitManager::base_generation() const { return base_generation_.load(); }
@@ -246,11 +258,18 @@ bool CommitManager::index_changed() {
 
 void CommitManager::background_loop() {
     std::unique_lock lock(mu_);
+    // Проба очереди заливки дорога (Vfs::status() считает очередь целиком), а цикл просыпается
+    // от каждой записи в индекс. В окне отсрочки проба идёт не чаще раза в defer_recheck, если
+    // её не потребовала заливка чанка или смена пробника (reprobe_). Результат пробы живёт только
+    // в своём окне отсрочки: вне его (коммит сделан, интервал не вышел) он сбрасывается, иначе
+    // новое окно пропустило бы первую пробу. Только этот поток.
+    std::optional<Clock::time_point> probed_at;
     while (!stopping_) {
         const auto now = clock_.now();
         std::optional<Clock::time_point> deadline;
         bool due = false;
         bool take = false;
+        bool deferring = false;
         if (read_only_.load()) {
             due = false;  // после CAS-конфликта коммитить нельзя: ждём остановки
         } else if (retry_at_) {
@@ -258,11 +277,44 @@ void CommitManager::background_loop() {
             deadline = *retry_at_;
         } else {
             if (dirty_) {
-                deadline = last_commit_ + config_.commit_interval;
-                due = chunks_since_commit_ >= config_.commit_every_chunks || now >= *deadline;
+                const auto interval_deadline = last_commit_ + config_.commit_interval;
+                if (chunks_since_commit_ >= config_.commit_every_chunks) {
+                    due = true;  // без отсрочки
+                } else if (now < interval_deadline) {
+                    deadline = interval_deadline;
+                } else {
+                    // Интервал вышел. Пока очередь заливки не пуста, откладываем (SPEC 7.1), но
+                    // не дольше commit_defer_factor · commit_interval с прошлого коммита.
+                    const auto hard_deadline =
+                        last_commit_ + config_.commit_interval * config_.commit_defer_factor;
+                    if (now >= hard_deadline) {
+                        due = true;
+                    } else if (!reprobe_.exchange(false) && probed_at &&
+                               now < *probed_at + config_.defer_recheck) {
+                        // Недавняя проба показала «занято»: ждать до следующей.
+                        deferring = true;
+                        deadline = std::min(hard_deadline, *probed_at + config_.defer_recheck);
+                    } else {
+                        lock.unlock();  // пробник заглядывает в Vfs: без mu_
+                        const bool busy = uploads_busy();
+                        lock.lock();
+                        probed_at = clock_.now();
+                        if (busy) {
+                            deferring = true;
+                            deadline = std::min(hard_deadline, *probed_at + config_.defer_recheck);
+                            spdlog::debug("commit: deferred, the upload queue is not empty");
+                        } else {
+                            due = true;
+                        }
+                    }
+                }
             }
             take = !due && take_due();
         }
+        if (!deferring) {
+            probed_at.reset();  // проба относится только к своему окну отсрочки
+        }
+
         if (take) {
             // Промежуточный забор (SPEC 6.6): забрать патч, не делая коммит. Ошибка уже в логе и
             // в retry_at_ (record_failure), следующая попытка — коммит-снимок.
@@ -344,6 +396,90 @@ CommitResult CommitManager::commit(bool force_snapshot) {
     return commit_locked(force_snapshot);
 }
 
+bool CommitManager::sleep_for(std::chrono::milliseconds d) {
+    std::unique_lock lock(mu_);
+    const auto until = clock_.now() + d;
+    while (!stopping_ && clock_.now() < until) {
+        clock_.wait(cv_, lock, until);
+    }
+    return !stopping_;
+}
+
+// Голова, которую мог показать кэш TDLib после нашего pin (SPEC 2, 7.1): нет закреплённого
+// (404) или более старый блоб этой же ФС. Чужой блоб или более новое поколение — не кэш.
+bool CommitManager::is_stale_own_head(const std::optional<store::HeadInfo>& head,
+                                      const CasExpect& expect) const {
+    if (!expect.msg_id) {
+        return false;  // первый коммит после init: до него своего pin не было
+    }
+    if (!head) {
+        return true;
+    }
+    if (head->msg_id >= *expect.msg_id) {
+        return false;
+    }
+    try {
+        const crypto::IndexHeader h = crypto::parse_index_header(head->header);
+        return h.fs_uuid == keys_.fs_uuid && h.generation < expect.generation;
+    } catch (const crypto::CorruptError&) {
+        return false;
+    }
+}
+
+bool CommitManager::cas_with_retry(const std::optional<store::HeadInfo>& first,
+                                   const CasExpect& expect) {
+    if (!last_pin_ || !is_stale_own_head(first, expect)) {
+        return false;
+    }
+    const auto until = *last_pin_ + config_.cas_retry_window;
+    std::optional<store::HeadInfo> head = first;
+    while (clock_.now() < until) {
+        const auto left =
+            std::chrono::duration_cast<std::chrono::milliseconds>(until - clock_.now());
+        spdlog::warn(
+            "commit: the channel head is older than our last pin (TDLib cache?), checking again "
+            "in {} s",
+            std::min(config_.cas_retry_period, left).count() / 1000);
+        if (!sleep_for(std::min(config_.cas_retry_period, left))) {
+            throw std::runtime_error("commit interrupted by shutdown while waiting for the head");
+        }
+        head = store_.read_head();
+        if (head_matches(head, expect.msg_id, expect.generation)) {
+            return true;
+        }
+        if (!is_stale_own_head(head, expect)) {
+            return false;
+        }
+    }
+    return false;
+}
+
+// Голова для разбора неподтверждённого pin (SPEC 7.1). Пока с попытки pin не прошло
+// cas_retry_window, ответ «нет головы» или «старая голова» — неизвестность (кэш TDLib, SPEC 2):
+// чтение повторяется раз в cas_retry_period, блоб не удаляется. Окно нужно, только если pin мог
+// пройти; после permanent-ошибки set_head — одно чтение. Возвращает последний ответ.
+std::optional<store::HeadInfo> CommitManager::read_head_for_unconfirmed(const Uploaded& up) {
+    std::optional<store::HeadInfo> head = store_.read_head();
+    if (!up.pin_may_have_passed) {
+        return head;
+    }
+    const auto until = last_pin_.value_or(clock_.now()) + config_.cas_retry_window;
+    const auto unknown = [&] { return !head || head->msg_id < up.msg_id; };
+    while (unknown() && clock_.now() < until) {
+        const auto left =
+            std::chrono::duration_cast<std::chrono::milliseconds>(until - clock_.now());
+        const auto pause = std::min(config_.cas_retry_period, left);
+        spdlog::warn(
+            "commit: the head is {} our unconfirmed pin (TDLib cache?), checking again in {} s",
+            head ? "older than" : "missing after", pause.count() / 1000);
+        if (!sleep_for(pause)) {
+            throw std::runtime_error("commit interrupted by shutdown while waiting for the head");
+        }
+        head = store_.read_head();
+    }
+    return head;
+}
+
 void CommitManager::record_failure(const std::string& what) {
     spdlog::error("commit failed: {}", what);
     {
@@ -406,7 +542,7 @@ CommitResult CommitManager::commit_locked(bool force_snapshot) {
     // есть незабранное» в этой ветке не нужна.
     if (unconfirmed_) {
         try {
-            const auto head = store_.read_head();
+            const auto head = read_head_for_unconfirmed(*unconfirmed_);
             if (head && head->msg_id == unconfirmed_->msg_id) {
                 spdlog::warn("commit: generation {} turned out to be pinned, finishing it",
                              unconfirmed_->generation);
@@ -587,7 +723,8 @@ CommitResult CommitManager::commit_locked(bool force_snapshot) {
         // Шаг 4: CAS по голове канала.
         t = SteadyClock::now();
         const auto head = store_.read_head();
-        if (!head_matches(head, expect.msg_id, expect.generation)) {
+        if (!head_matches(head, expect.msg_id, expect.generation) &&
+            !cas_with_retry(head, expect)) {
             read_only_.store(true);
             const std::string what = "the channel head changed under us (expected generation " +
                                      std::to_string(expect.generation) +
@@ -614,7 +751,14 @@ CommitResult CommitManager::commit_locked(bool force_snapshot) {
         remove_quietly(blob_path);
         try {
             store_.set_head(up.msg_id, expect.msg_id);
-        } catch (const store::StoreError&) {
+            last_pin_ = clock_.now();
+        } catch (const store::StoreError& e) {
+            // Окончательная ошибка: pin не прошёл, ждать кэш TDLib незачем (SPEC 7.1). Иначе pin
+            // мог состояться, а кэш TDLib мог его не показать.
+            up.pin_may_have_passed = e.kind() != store::StoreErrorKind::permanent;
+            if (up.pin_may_have_passed) {
+                last_pin_ = clock_.now();
+            }
             set_unconfirmed(up);  // ответ мог потеряться после pin: разберёт следующая попытка
             throw;
         }

@@ -1,0 +1,4 @@
+series,kind,size_bytes,parallel,result,max_clean_rate,flood_rate,flood_retry_s,bandwidth_bound_rate,steps_run,started_utc,ended_utc,deleted,note
+wave-16MiB-p2,wave,16777216,2,completed,6,,,,1,2026-11-20T08:41:40Z,2026-11-20T08:42:20Z,4,
+ladder-1KiB-p1,ladder,1024,1,completed,5,,,,1,2026-11-20T08:42:40Z,2026-11-20T08:44:40Z,10,
+ladder-16MiB-p1,ladder,16777216,1,completed,1,,,,1,2026-11-20T08:45:00Z,2026-11-20T08:47:00Z,2,

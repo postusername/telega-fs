@@ -209,5 +209,82 @@ TEST_F(KeyringTest, CorruptedFileOnDisk) {
     }
 }
 
+// --- keyring без ФС (SPEC 11, «Keyring до init») ---
+
+TEST_F(KeyringTest, WithoutFsHasZeroFsFieldsAndRealTdlibKey) {
+    const KdfParams kdf = fast_params();
+    const Key kek = derive_kek("pw", kdf);
+    const KeyringFile bare = make_keyring_without_fs(kdf, kek, tdlib);
+    EXPECT_FALSE(keyring_has_fs(bare));
+    EXPECT_EQ(bare.kdf, kdf);
+
+    const auto raw = serialize_keyring(bare);
+    ASSERT_EQ(raw.size(), 256U);
+    // fs_uuid (16..32) и wrapped_master (64..136) нулевые, wrapped_tdlib (136..208) нет.
+    EXPECT_TRUE(std::all_of(raw.begin() + 16, raw.begin() + 32,
+                            [](std::byte b) { return b == std::byte{0}; }));
+    EXPECT_TRUE(std::all_of(raw.begin() + 64, raw.begin() + 136,
+                            [](std::byte b) { return b == std::byte{0}; }));
+    EXPECT_FALSE(std::all_of(raw.begin() + 136, raw.begin() + 208,
+                             [](std::byte b) { return b == std::byte{0}; }));
+    EXPECT_EQ(parse_keyring(raw), bare);
+}
+
+TEST_F(KeyringTest, WithoutFsPasswordCheckGoesThroughWrappedTdlib) {
+    const KdfParams kdf = fast_params();
+    const Key kek = derive_kek("pw", kdf);
+    const KeyringFile bare = make_keyring_without_fs(kdf, kek, tdlib);
+    const auto ok = unlock_tdlib_key(bare, kek);
+    if (!ok.has_value()) {
+        FAIL() << "unlock failed";
+    }
+    EXPECT_TRUE(*ok == tdlib);
+    EXPECT_FALSE(unlock_tdlib_key(bare, derive_kek("PW", kdf)).has_value());
+    // master у такого keyring нет.
+    EXPECT_THROW((void)unlock_keyring(bare, kek), std::logic_error);
+    // Для keyring с ФС unlock_tdlib_key тоже работает.
+    const KeyringFile full = make_keyring(fs_uuid, kdf, kek, master, tdlib);
+    ASSERT_TRUE(unlock_tdlib_key(full, kek).has_value());
+    EXPECT_FALSE(unlock_tdlib_key(full, Key::random()).has_value());
+}
+
+TEST_F(KeyringTest, AttachFsKeepsKdfAndTdlibKey) {
+    const KdfParams kdf = fast_params();
+    const Key kek = derive_kek("pw", kdf);
+    const KeyringFile bare = make_keyring_without_fs(kdf, kek, tdlib);
+    const KeyringFile full = attach_fs(bare, fs_uuid, kek, master);
+    EXPECT_TRUE(keyring_has_fs(full));
+    EXPECT_EQ(full.fs_uuid, fs_uuid);
+    EXPECT_EQ(full.kdf, bare.kdf);
+    EXPECT_EQ(full.wrapped_tdlib, bare.wrapped_tdlib);
+    const auto keys = unlock_keyring(full, kek);
+    if (!keys.has_value()) {
+        FAIL() << "unlock failed";
+    }
+    EXPECT_TRUE(keys->master == master);
+    EXPECT_TRUE(keys->tdlib_db == tdlib);
+    EXPECT_THROW((void)attach_fs(bare, FsUuid{}, kek, master), std::invalid_argument);
+}
+
+TEST_F(KeyringTest, ParseRejectsHalfEmptyFsFields) {
+    const Key kek = Key::random();
+    const KeyringFile full = make_keyring(fs_uuid, keyfile_kdf_params(), kek, master, tdlib);
+    KeyringFile no_uuid = full;
+    no_uuid.fs_uuid = FsUuid{};
+    EXPECT_THROW((void)parse_keyring(serialize_keyring(no_uuid)), CorruptError);
+    KeyringFile no_master = full;
+    no_master.wrapped_master = WrappedKey{};
+    EXPECT_THROW((void)parse_keyring(serialize_keyring(no_master)), CorruptError);
+}
+
+TEST_F(KeyringTest, WithoutFsWorksWithKeyfileKdf) {
+    const Key kek = Key::random();
+    const KeyringFile bare = make_keyring_without_fs(keyfile_kdf_params(), kek, tdlib);
+    save_keyring(tmp / "keyring", bare);
+    const KeyringFile loaded = load_keyring(tmp / "keyring");
+    EXPECT_FALSE(keyring_has_fs(loaded));
+    ASSERT_TRUE(unlock_tdlib_key(loaded, kek).has_value());
+}
+
 }  // namespace
 }  // namespace telega::crypto

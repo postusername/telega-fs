@@ -22,6 +22,12 @@ add_library(telega_store STATIC
     store/local_dir_store.cpp)
 target_link_libraries(telega_store PUBLIC telega_common)
 
+# tgstore: TelegramStore и лимитер (SPEC 3, 10.2). Без TDLib: только telega_td.
+add_library(telega_tgstore STATIC
+    store/rate_limiter.cpp
+    store/telegram_store.cpp)
+target_link_libraries(telega_tgstore PUBLIC telega_store telega_td)
+
 # meta: MetaStore, state.sqlite, дельта-журнал (SPEC 6)
 add_library(telega_meta STATIC
     meta/sqlite.cpp
@@ -54,11 +60,31 @@ target_link_libraries(telega_fuse PUBLIC telega_vfs PkgConfig::FUSE3 spdlog::spd
 
 # app: config.toml, профили, XDG-пути, flock (SPEC 12)
 add_library(telega_config STATIC
-    app/config.cpp)
+    app/config.cpp
+    app/config_edit.cpp)
 target_link_libraries(telega_config PUBLIC telega_common tomlplusplus::tomlplusplus)
+
+# td: TdTransport, TdRuntime, TdClient, ошибки, трекер отправки, авторизация (SPEC 10.1).
+# С TDLib не линкуется: тестируется на фейковом транспорте (SPEC 15.4).
+add_library(telega_td STATIC
+    td/td_error.cpp
+    td/td_client.cpp
+    td/td_runtime.cpp
+    td/send_tracker.cpp
+    td/auth.cpp)
+target_link_libraries(telega_td PUBLIC telega_common nlohmann_json::nlohmann_json)
+
+# tdjson: транспорт поверх td_json_client. Линкуется только к бинарникам (telega-fs, tgfs-bench).
+add_library(telega_tdjson STATIC
+    td/tdjson_transport.cpp)
+target_link_libraries(telega_tdjson PUBLIC telega_td Td::TdJsonStatic)
 
 add_library(telega_core STATIC
     app/version.cpp
+    app/cli_util.cpp
+    app/tg_session.cpp
+    app/terminal_prompter.cpp
+    app/telegram_cmds.cpp
     app/commands.cpp)
 target_include_directories(telega_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -74,6 +100,8 @@ target_link_libraries(telega_core
         telega_vfs
         telega_config
         telega_fuse
+        telega_td
+        telega_tgstore
         telega::sqlite
         PkgConfig::SODIUM
         PkgConfig::ZSTD
@@ -84,4 +112,5 @@ target_link_libraries(telega_core
         Threads::Threads)
 
 add_executable(telega-fs app/main.cpp)
-target_link_libraries(telega-fs PRIVATE telega_core CLI11::CLI11 Td::TdJsonStatic)
+target_link_libraries(telega-fs PRIVATE telega_core telega_td telega_tdjson CLI11::CLI11
+                      Td::TdJsonStatic)

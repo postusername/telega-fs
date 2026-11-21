@@ -43,6 +43,35 @@ void Rng::fill(std::byte* out, size_t n) {
     }
 }
 
+std::vector<std::string> split_list(const std::string& text) {
+    std::vector<std::string> out;
+    std::istringstream in(text);
+    std::string part;
+    while (std::getline(in, part, ',')) {
+        if (!part.empty()) {
+            out.push_back(part);
+        }
+    }
+    return out;
+}
+
+int64_t parse_bytes(const std::string& text) {
+    size_t used = 0;
+    const double value = std::stod(text, &used);
+    const std::string unit = text.substr(used);
+    double mul = 1;
+    if (unit == "KiB") {
+        mul = 1024.0;
+    } else if (unit == "MiB") {
+        mul = 1024.0 * 1024.0;
+    } else if (unit == "GiB") {
+        mul = 1024.0 * 1024.0 * 1024.0;
+    } else if (!unit.empty()) {
+        throw std::runtime_error("bad size: " + text);
+    }
+    return static_cast<int64_t>(value * mul);
+}
+
 Summary summarize(std::vector<double> values) {
     Summary s;
     s.n = values.size();

@@ -1,0 +1,266 @@
+server_id,found,content_type,name_or_text,is_outgoing,expected,expected_kind,verdict
+1,1,messageSupergroupChatCreate,,0,gap,channel_create_assumed,gap_service
+2,1,messageText,e3 user 1,0,alive,user_text,ok
+3,0,-,,-,deleted,user_text,ok
+4,1,messageText,e3 user 3,0,alive,user_text,ok
+5,0,-,,-,deleted,user_text,ok
+6,1,messageText,e3 user 5,0,alive,user_text,ok
+7,0,-,,-,deleted,bot_doc,ok
+8,1,messageDocument,a708f12d0751a6b9.bin,1,alive,bot_doc,ok
+9,1,messageText,e3 bot s9 omega gamma alpha alpha beta gamma beta alpha gamma alpha kappa omega gamma sigma delta,1,alive,bot_text,ok
+10,1,messageDocument,b64edb8bf1018328.bin,1,alive,bot_doc,ok
+11,1,messageDocument,7e10c42c76b3bc06.bin,1,alive,bot_doc,ok
+12,1,messageDocument,726db234bb371f0c.bin,1,alive,bot_doc,ok
+13,1,messageDocument,b4501c34121460a2.bin,1,alive,bot_doc,ok
+14,0,-,,-,deleted,bot_doc,ok
+15,1,messageDocument,8bfbc02420840873.bin,1,alive,bot_doc,ok
+16,1,messageText,e3 bot s16 sigma sigma delta delta theta theta alpha beta beta beta omega,1,alive,bot_text,ok
+17,0,-,,-,deleted,bot_doc,ok
+18,1,messageDocument,77c513feec411372.bin,1,alive,bot_doc,ok
+19,0,-,,-,deleted,bot_doc,ok
+20,1,messageDocument,351da09bad7926e4.bin,1,alive,bot_doc,ok
+21,0,-,,-,deleted,bot_text,ok
+22,1,messageDocument,0659483e6f58a883.idx,1,alive,bot_idx,ok
+23,1,messagePinMessage,pinned 22,1,service,messagePinMessage,ok
+24,1,messageText,e3 bot s24 sigma gamma omega alpha theta sigma theta sigma beta omega beta gamma omega kappa kappa omega delta,1,alive,bot_text,ok
+25,0,-,,-,deleted,bot_text,ok
+26,1,messageDocument,e2bdd8757dc8c056.bin,1,alive,bot_doc,ok
+27,1,messageDocument,43219d39eea6bcda.bin,1,alive,bot_doc,ok
+28,0,-,,-,deleted,bot_doc,ok
+29,1,messageDocument,8ff2292edb716578.bin,1,alive,bot_doc,ok
+30,1,messageDocument,805ca928ed6f22cf.bin,1,alive,bot_doc,ok
+31,1,messageDocument,b7a311f3d730d4ef.bin,1,alive,bot_doc,ok
+32,1,messageText,e3 bot s33 alpha alpha gamma omega alpha alpha theta beta kappa delta sigma gamma delta beta omega,1,alive,bot_text,ok
+33,1,messageText,e3 bot s34 theta alpha alpha theta omega kappa theta sigma sigma theta delta beta kappa omega omega beta beta kappa,1,alive,bot_text,ok
+34,1,messageDocument,fb66c43d0dfa54d8.bin,1,alive,bot_doc,ok
+35,0,-,,-,deleted,bot_doc,ok
+36,1,messageDocument,2f26ad1baec54701.bin,1,alive,bot_doc,ok
+37,0,-,,-,deleted,bot_text,ok
+38,0,-,,-,deleted,bot_doc,ok
+39,1,messageDocument,93f4e72a735e3ee7.idx,1,alive,bot_idx,ok
+40,1,messagePinMessage,pinned 39,1,service,messagePinMessage,ok
+41,1,messageText,e3 bot s43 sigma alpha sigma gamma sigma kappa omega kappa kappa omega gamma gamma kappa,1,alive,bot_text,ok
+42,1,messageDocument,e971a391eb7a89a9.bin,1,alive,bot_doc,ok
+43,1,messageText,e3 bot s45 kappa sigma omega theta beta sigma alpha beta gamma,1,alive,bot_text,ok
+44,0,-,,-,deleted,bot_doc,ok
+45,0,-,,-,deleted,bot_text,ok
+46,1,messageText,e3 bot s48 gamma delta gamma theta gamma alpha omega theta kappa sigma alpha sigma,1,alive,bot_text,ok
+47,1,messageDocument,e4cb49c51e78088f.bin,1,alive,bot_doc,ok
+48,1,messageText,e3 bot s50 beta kappa beta beta,1,alive,bot_text,ok
+49,1,messageDocument,7bbc433cc80dd801.bin,1,alive,bot_doc,ok
+50,1,messageText,e3 bot s52 sigma theta alpha omega alpha alpha omega theta theta kappa omega sigma omega theta sigma sigma theta kappa beta alpha delta omega sigma,1,alive,bot_text,ok
+51,1,messageText,e3 bot s57 theta theta beta theta delta beta theta theta delta theta,1,alive,bot_text,ok
+52,1,messageDocument,4ca3cd2268a45a92.bin,1,alive,bot_doc,ok
+53,1,messageDocument,449e35e5c9cca872.bin,1,alive,bot_doc,ok
+54,0,-,,-,deleted,bot_doc,ok
+55,1,messageDocument,43f0d92c7317c0b1.bin,1,alive,bot_doc,ok
+56,1,messageDocument,a5477c54a1bba120.idx,1,alive,bot_idx,ok
+57,1,messagePinMessage,pinned 56,1,service,messagePinMessage,ok
+58,0,-,,-,deleted,bot_doc,ok
+59,1,messageText,e3 bot s66 omega kappa sigma sigma sigma delta beta omega alpha theta gamma kappa kappa theta omega,1,alive,bot_text,ok
+60,0,-,,-,deleted,bot_text,ok
+61,1,messageDocument,7e2b6f3483d43171.bin,1,alive,bot_doc,ok
+62,1,messageDocument,a56d3ada528a30d1.bin,1,alive,bot_doc,ok
+63,1,messageDocument,b6270079789d95f0.bin,1,alive,bot_doc,ok
+64,1,messageDocument,f2d35ab81a1fe93c.bin,1,alive,bot_doc,ok
+65,1,messageDocument,61eaf1ba50b7844a.bin,1,alive,bot_doc,ok
+66,0,-,,-,deleted,bot_doc,ok
+67,1,messageText,e3 bot s74 theta omega alpha delta alpha omega kappa kappa gamma delta alpha theta beta theta omega delta theta sigma delta,1,alive,bot_text,ok
+68,1,messageDocument,ef1bd3557a3aa8de.bin,1,alive,bot_doc,ok
+69,1,messageDocument,784573c0146163d2.bin,1,alive,bot_doc,ok
+70,1,messageText,e3 bot s77 kappa omega delta gamma omega gamma delta delta beta kappa,1,alive,bot_text,ok
+71,1,messageDocument,b2d3494becb2228e.bin,1,alive,bot_doc,ok
+72,1,messageDocument,9549fa502f40158e.bin,1,alive,bot_doc,ok
+73,1,messageDocument,f2671e40cb1b6d28.idx,1,alive,bot_idx,ok
+74,1,messagePinMessage,pinned 73,1,service,messagePinMessage,ok
+75,1,messageDocument,c92d58e753a081bc.bin,1,alive,bot_doc,ok
+76,1,messageDocument,c7d92e695edef6de.bin,1,alive,bot_doc,ok
+77,1,messageText,e3 bot s89 sigma kappa alpha beta theta kappa,1,alive,bot_text,ok
+78,1,messageDocument,7a9ab73519821ed1.bin,1,alive,bot_doc,ok
+79,1,messageText,e3 bot s91 delta beta theta kappa kappa theta alpha theta sigma alpha gamma sigma alpha kappa omega kappa theta sigma sigma delta omega,1,alive,bot_text,ok
+80,1,messageDocument,cf47bef692c8dcce.bin,1,alive,bot_doc,ok
+81,1,messageText,e3 bot s93 omega kappa theta theta alpha gamma theta kappa beta delta delta alpha,1,alive,bot_text,ok
+82,1,messageText,e3 bot s94 beta omega gamma beta theta omega beta omega delta omega kappa omega beta gamma delta kappa theta,1,alive,bot_text,ok
+83,1,messageText,e3 bot s95 kappa beta kappa alpha delta gamma delta delta kappa kappa alpha sigma sigma gamma alpha kappa theta omega theta alpha sigma beta,1,alive,bot_text,ok
+84,1,messageDocument,79ee4f3af5b72ec2.bin,1,alive,bot_doc,ok
+85,1,messageDocument,ac5ab5583e34871f.bin,1,alive,bot_doc,ok
+86,1,messageDocument,ee0595ba497075dd.bin,1,alive,bot_doc,ok
+87,0,-,,-,deleted,bot_doc,ok
+88,1,messageDocument,46636b3497507268.bin,1,alive,bot_doc,ok
+89,1,messageDocument,7c3550c153c43ed1.bin,1,alive,bot_doc,ok
+90,1,messageDocument,db909f0260ac5c07.idx,1,alive,bot_idx,ok
+91,1,messagePinMessage,pinned 90,1,service,messagePinMessage,ok
+92,1,messageDocument,bc31368c7d984882.bin,1,alive,bot_doc,ok
+93,1,messageText,e3 bot s106 gamma beta delta sigma delta theta gamma kappa theta gamma gamma,1,alive,bot_text,ok
+94,1,messageDocument,1d283990328793e5.bin,1,alive,bot_doc,ok
+95,1,messageDocument,1639f8315b824e68.bin,1,alive,bot_doc,ok
+96,1,messageDocument,8601364c6ec9910e.bin,1,alive,bot_doc,ok
+97,1,messageDocument,6e518e5c3f6024cb.bin,1,alive,bot_doc,ok
+98,1,messageDocument,d2720bbf1c57b870.bin,1,alive,bot_doc,ok
+99,1,messageDocument,6bc047fc1ae8b3b1.bin,1,alive,bot_doc,ok
+100,1,messageDocument,f352d478e9d4d6c2.bin,1,alive,bot_doc,ok
+101,1,messageDocument,2386d71cc1406b5a.bin,1,alive,bot_doc,ok
+102,1,messageDocument,078d27fa856debda.bin,1,alive,bot_doc,ok
+103,1,messageText,e3 bot s120 delta omega kappa kappa kappa alpha gamma theta theta kappa,1,alive,bot_text,ok
+104,1,messageText,e3 bot s121 theta alpha omega gamma sigma theta theta beta sigma gamma alpha theta gamma omega kappa gamma sigma omega theta alpha alpha sigma alpha theta beta,1,alive,bot_text,ok
+105,1,messageText,e3 bot s122 sigma alpha delta kappa delta sigma beta sigma alpha kappa delta theta beta theta gamma alpha delta delta theta gamma delta sigma,1,alive,bot_text,ok
+106,1,messageDocument,964c31e59937be55.bin,1,alive,bot_doc,ok
+107,1,messageDocument,0b64ffa13213bdd3.idx,1,alive,bot_idx,ok
+108,1,messagePinMessage,pinned 107,1,service,messagePinMessage,ok
+109,1,messageText,e3 bot s127 omega gamma theta sigma omega kappa gamma sigma gamma delta sigma delta alpha,1,alive,bot_text,ok
+110,1,messageText,e3 bot s128 alpha delta sigma omega delta,1,alive,bot_text,ok
+111,1,messageDocument,0168904aeda39adc.bin,1,alive,bot_doc,ok
+112,1,messageText,e3 bot s130 omega delta sigma beta kappa beta alpha gamma,1,alive,bot_text,ok
+113,1,messageDocument,406c889b555eb0be.bin,1,alive,bot_doc,ok
+114,1,messageDocument,607d0fe9229e3335.bin,1,alive,bot_doc,ok
+115,0,-,,-,deleted,bot_doc,ok
+116,1,messageText,e3 bot s134 sigma omega kappa delta beta omega delta gamma gamma beta beta delta kappa alpha delta kappa,1,alive,bot_text,ok
+117,1,messageDocument,687f2985c98ce926.bin,1,alive,bot_doc,ok
+118,1,messageDocument,bf097d9ae34f8614.bin,1,alive,bot_doc,ok
+119,1,messageText,e3 bot s141 alpha alpha kappa theta kappa kappa gamma delta alpha beta theta beta gamma kappa kappa delta kappa alpha beta omega theta,1,alive,bot_text,ok
+120,1,messageText,e3 bot s142 gamma beta omega delta,1,alive,bot_text,ok
+121,1,messageDocument,f423a23d21690cd7.bin,1,alive,bot_doc,ok
+122,1,messageText,e3 bot s144 gamma kappa gamma sigma kappa omega omega gamma sigma sigma gamma omega,1,alive,bot_text,ok
+123,1,messageDocument,d40346557687a18e.bin,1,alive,bot_doc,ok
+124,1,messageDocument,fa21f6c077717c6d.idx,1,alive,bot_idx,ok
+125,1,messagePinMessage,pinned 124,1,service,messagePinMessage,ok
+126,1,messageText,e3 bot s149 gamma kappa sigma delta theta theta alpha alpha theta kappa,1,alive,bot_text,ok
+127,1,messageText,e3 bot s150 beta alpha kappa gamma beta sigma sigma sigma alpha gamma beta gamma gamma sigma kappa theta,1,alive,bot_text,ok
+128,1,messageDocument,bc2e61597d00cf37.bin,1,alive,bot_doc,ok
+129,1,messageText,e3 bot s152 theta gamma delta delta delta,1,alive,bot_text,ok
+130,1,messageText,e3 bot s153 sigma theta theta kappa delta theta,1,alive,bot_text,ok
+131,1,messageText,e3 bot s154 gamma theta alpha gamma omega beta beta kappa omega delta theta alpha alpha gamma gamma gamma sigma,1,alive,bot_text,ok
+132,1,messageText,e3 bot s155 theta omega alpha theta omega alpha sigma kappa theta sigma sigma theta gamma sigma omega omega gamma,1,alive,bot_text,ok
+133,1,messageText,e3 bot s156 omega beta kappa beta theta,1,alive,bot_text,ok
+134,1,messageText,e3 bot s157 theta beta omega theta kappa beta alpha omega beta beta delta theta alpha alpha,1,alive,bot_text,ok
+135,1,messageDocument,3401a051a04ae9b3.bin,1,alive,bot_doc,ok
+136,1,messageDocument,c7c376a95ef845d5.bin,1,alive,bot_doc,ok
+137,1,messageDocument,96cb8b9abb139359.bin,1,alive,bot_doc,ok
+138,1,messageText,e3 bot s161 sigma gamma sigma sigma sigma omega sigma alpha beta alpha theta theta theta delta delta gamma alpha gamma,1,alive,bot_text,ok
+139,1,messageText,e3 bot s162 delta sigma gamma theta,1,alive,bot_text,ok
+140,1,messageDocument,f047dfa93ac91738.bin,1,alive,bot_doc,ok
+141,1,messageDocument,cbe7d1b984c1dd8b.idx,1,alive,bot_idx,ok
+142,1,messagePinMessage,pinned 141,1,service,messagePinMessage,ok
+143,1,messageText,e3 bot s171 theta alpha sigma beta gamma gamma theta delta beta kappa sigma delta gamma omega omega beta theta delta omega delta sigma theta theta omega,1,alive,bot_text,ok
+144,1,messageDocument,d237d6acabe1613f.bin,1,alive,bot_doc,ok
+145,1,messageText,e3 bot s173 sigma alpha sigma,1,alive,bot_text,ok
+146,1,messageDocument,d5e2ef907cc38c06.bin,1,alive,bot_doc,ok
+147,1,messageText,e3 bot s175 beta alpha sigma beta sigma delta kappa gamma omega theta theta kappa,1,alive,bot_text,ok
+148,1,messageDocument,fd59ed2983207f53.bin,1,alive,bot_doc,ok
+149,1,messageDocument,5396f6fec8fa7edb.bin,1,alive,bot_doc,ok
+150,1,messageDocument,3a05f88566a9e842.bin,1,alive,bot_doc,ok
+151,1,messageText,e3 bot s179 kappa omega alpha kappa beta alpha sigma kappa alpha theta sigma sigma theta alpha alpha delta alpha theta,1,alive,bot_text,ok
+152,1,messageDocument,b89b9ef05ef9069f.bin,1,alive,bot_doc,ok
+153,1,messageText,e3 bot s181 gamma omega omega,1,alive,bot_text,ok
+154,1,messageDocument,db41001aeeb505d2.bin,1,alive,bot_doc,ok
+155,1,messageDocument,39352a3c1f216ee5.bin,1,alive,bot_doc,ok
+156,1,messageDocument,70649287b4b26307.bin,1,alive,bot_doc,ok
+157,1,messageDocument,c5ae7133bac238d3.bin,1,alive,bot_doc,ok
+158,1,messageDocument,7141e10e31d48e90.idx,1,alive,bot_idx,ok
+159,1,messagePinMessage,pinned 158,1,service,messagePinMessage,ok
+160,1,messageDocument,feae7fd3d55c6057.bin,1,alive,bot_doc,ok
+161,1,messageDocument,494ddd4c27c5ea20.bin,1,alive,bot_doc,ok
+162,1,messageDocument,ab691c2cec633679.bin,1,alive,bot_doc,ok
+163,1,messageDocument,64f23c43c6bb687b.bin,1,alive,bot_doc,ok
+164,1,messageDocument,d1fa6126a8456a4e.bin,1,alive,bot_doc,ok
+165,1,messageDocument,d596c121123d509f.bin,1,alive,bot_doc,ok
+166,0,-,,-,beyond,-,ok
+167,0,-,,-,beyond,-,ok
+168,0,-,,-,beyond,-,ok
+169,0,-,,-,beyond,-,ok
+170,0,-,,-,beyond,-,ok
+171,0,-,,-,beyond,-,ok
+172,0,-,,-,beyond,-,ok
+173,0,-,,-,beyond,-,ok
+174,0,-,,-,beyond,-,ok
+175,0,-,,-,beyond,-,ok
+176,0,-,,-,beyond,-,ok
+177,0,-,,-,beyond,-,ok
+178,0,-,,-,beyond,-,ok
+179,0,-,,-,beyond,-,ok
+180,0,-,,-,beyond,-,ok
+181,0,-,,-,beyond,-,ok
+182,0,-,,-,beyond,-,ok
+183,0,-,,-,beyond,-,ok
+184,0,-,,-,beyond,-,ok
+185,0,-,,-,beyond,-,ok
+186,0,-,,-,beyond,-,ok
+187,0,-,,-,beyond,-,ok
+188,0,-,,-,beyond,-,ok
+189,0,-,,-,beyond,-,ok
+190,0,-,,-,beyond,-,ok
+191,0,-,,-,beyond,-,ok
+192,0,-,,-,beyond,-,ok
+193,0,-,,-,beyond,-,ok
+194,0,-,,-,beyond,-,ok
+195,0,-,,-,beyond,-,ok
+196,0,-,,-,beyond,-,ok
+197,0,-,,-,beyond,-,ok
+198,0,-,,-,beyond,-,ok
+199,0,-,,-,beyond,-,ok
+200,0,-,,-,beyond,-,ok
+201,0,-,,-,beyond,-,ok
+202,0,-,,-,beyond,-,ok
+203,0,-,,-,beyond,-,ok
+204,0,-,,-,beyond,-,ok
+205,0,-,,-,beyond,-,ok
+206,0,-,,-,beyond,-,ok
+207,0,-,,-,beyond,-,ok
+208,0,-,,-,beyond,-,ok
+209,0,-,,-,beyond,-,ok
+210,0,-,,-,beyond,-,ok
+211,0,-,,-,beyond,-,ok
+212,0,-,,-,beyond,-,ok
+213,0,-,,-,beyond,-,ok
+214,0,-,,-,beyond,-,ok
+215,0,-,,-,beyond,-,ok
+216,0,-,,-,beyond,-,ok
+217,0,-,,-,beyond,-,ok
+218,0,-,,-,beyond,-,ok
+219,0,-,,-,beyond,-,ok
+220,0,-,,-,beyond,-,ok
+221,0,-,,-,beyond,-,ok
+222,0,-,,-,beyond,-,ok
+223,0,-,,-,beyond,-,ok
+224,0,-,,-,beyond,-,ok
+225,0,-,,-,beyond,-,ok
+226,0,-,,-,beyond,-,ok
+227,0,-,,-,beyond,-,ok
+228,0,-,,-,beyond,-,ok
+229,0,-,,-,beyond,-,ok
+230,0,-,,-,beyond,-,ok
+231,0,-,,-,beyond,-,ok
+232,0,-,,-,beyond,-,ok
+233,0,-,,-,beyond,-,ok
+234,0,-,,-,beyond,-,ok
+235,0,-,,-,beyond,-,ok
+236,0,-,,-,beyond,-,ok
+237,0,-,,-,beyond,-,ok
+238,0,-,,-,beyond,-,ok
+239,0,-,,-,beyond,-,ok
+240,0,-,,-,beyond,-,ok
+241,0,-,,-,beyond,-,ok
+242,0,-,,-,beyond,-,ok
+243,0,-,,-,beyond,-,ok
+244,0,-,,-,beyond,-,ok
+245,0,-,,-,beyond,-,ok
+246,0,-,,-,beyond,-,ok
+247,0,-,,-,beyond,-,ok
+248,0,-,,-,beyond,-,ok
+249,0,-,,-,beyond,-,ok
+250,0,-,,-,beyond,-,ok
+251,0,-,,-,beyond,-,ok
+252,0,-,,-,beyond,-,ok
+253,0,-,,-,beyond,-,ok
+254,0,-,,-,beyond,-,ok
+255,0,-,,-,beyond,-,ok
+256,0,-,,-,beyond,-,ok
+257,0,-,,-,beyond,-,ok
+258,0,-,,-,beyond,-,ok
+259,0,-,,-,beyond,-,ok
+260,0,-,,-,beyond,-,ok
+261,0,-,,-,beyond,-,ok
+262,0,-,,-,beyond,-,ok
+263,0,-,,-,beyond,-,ok
+264,0,-,,-,beyond,-,ok
+265,0,-,,-,beyond,-,ok

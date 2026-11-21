@@ -42,7 +42,10 @@ struct Profile {
     uint64_t patch_take_rows = 2000;
     double checkpoint_ratio = 0.25;
     uint32_t retain_generations = 8;
-    uint32_t send_rate = 20;
+    uint32_t send_rate = 12;  // действий в минуту (SPEC 10.2, E5)
+    uint64_t send_bytes_rate = uint64_t{224} << 20U;  // байт загружаемых документов в минуту
+    uint64_t album_max_doc_size = uint64_t{8} << 20U;  // не больше — альбомами по 10 (E6)
+    std::chrono::milliseconds read_pause{10'000};  // пауза между пачками getMessages (E3)
     uint32_t upload_concurrency = 2;
     uint32_t download_concurrency = 4;
     std::chrono::milliseconds seal_delay{5'000};
@@ -52,11 +55,12 @@ struct Profile {
     uint64_t plain_cache = uint64_t{64} << 20U;
 
     // Задаются при init и дальше берутся из index.sqlite (meta), а не из конфига.
-    uint64_t chunk_size = uint64_t{16} << 20U;
+    uint64_t chunk_size = uint64_t{8} << 20U;  // E7
     uint64_t inline_max = uint64_t{4} << 10U;
     uint64_t inline_budget = uint64_t{16} << 20U;
-    uint64_t pack_threshold = uint64_t{1} << 20U;
-    uint64_t pack_target = uint64_t{16} << 20U;
+    uint64_t pack_threshold = uint64_t{4}
+                              << 20U;  // E9; без явного значения не больше chunk_size / 2
+    uint64_t pack_target = uint64_t{8} << 20U;  // E9 и E7; без явного значения не больше chunk_size
     std::chrono::milliseconds pack_max_age{30'000};
 };
 

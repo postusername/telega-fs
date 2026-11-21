@@ -19,9 +19,13 @@
 // - порядок блокировок: полоса inode → MetaStore → overlay (StateStore, затем структуры
 //   Overlay под std::shared_mutex) → кэш открытого текста. Счётчики lookup/open, очередь
 //   загрузок и семафор скачиваний — листовые мьютексы;
-// - загрузки идут в пуле из upload_concurrency потоков, отдельный поток-таймер запечатывает
-//   чанки по seal_delay. Store при загрузке вызывается без блокировок, затем результат
-//   применяется под полосой inode, если чанк ещё нужен (см. upload_chunk в vfs_upload.cpp).
+// - загрузки идут в пуле из upload_workers() потоков (SPEC 8.1, «Параллельность загрузок»):
+//   upload_concurrency, а если Store собирает альбомы (Store::gathers_albums) —
+//   min(10 · upload_concurrency, 32). Ждущие в Store.put_chunk нужны ему, чтобы набрать альбом,
+//   а реальных одновременных отправок не больше upload_concurrency ограничивает сам Store.
+//   Отдельный поток-таймер запечатывает чанки по seal_delay. Store при загрузке вызывается без
+//   блокировок, затем результат применяется под полосой inode, если чанк ещё нужен (см.
+//   upload_chunk в vfs_upload.cpp).
 
 #include <sys/stat.h>
 
@@ -317,6 +321,9 @@ class Vfs {
     bool restore_inline_position(int64_t ino);
     // Индекс надо обрезать по size (экстенты или инлайн длиннее)?
     bool index_needs_clamp(int64_t ino, int64_t size);
+    // Потоков загрузки: upload_concurrency, для Store с альбомами min(10 · upload_concurrency, 32)
+    // (SPEC 8.1). Считается в 64 битах: upload_concurrency из конфига ничем не ограничена сверху.
+    [[nodiscard]] uint32_t upload_workers() const;
     void start_threads();
     void stop_threads();
     void worker_loop();

@@ -16,6 +16,7 @@
 // - --ro ничего не меняет в канале и в индексе: при конфликте или откате отдаётся локальный
 //   индекс как есть.
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -83,6 +84,12 @@ struct MountOptions {
     bool read_only = false;  // --ro
     bool discard_local = false;  // --discard-local: G_r > G_l с локальными изменениями
     bool force_local = false;  // --force-local: G_r < G_l, следующий коммит — снимок
+    // Кэш TDLib (SPEC 2): сразу после init или размонтирования голова канала может до минуты
+    // читаться старой или пустой. Если у профиля есть локальный индекс с головой H, а канал
+    // отдал «нет головы» или голову старше H, чтение повторяется раз в `stale_head_period`, но
+    // не дольше `stale_head_window` (0 — не повторять, для хранилищ без кэша).
+    std::chrono::milliseconds stale_head_window{0};
+    std::chrono::milliseconds stale_head_period{10'000};
     CommitConfig commit;           // tmp_dir и read_only заполняет mount_fs
     bool start_background = true;  // фоновый поток CommitManager
 };

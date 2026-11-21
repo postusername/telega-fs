@@ -3,11 +3,16 @@
 #include <td/telegram/td_json_client.h>
 
 #include <exception>
+#include <filesystem>
 #include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <string>
 
 #include "app/commands.h"
+#include "app/tg_session.h"
 #include "app/version.h"
+#include "td/tdjson_transport.h"
 
 namespace {
 
@@ -24,7 +29,21 @@ std::string tdlib_version() {
     return reply.value("value", "unknown");
 }
 
+// Настоящий транспорт TDLib (SPEC 10.1, 15.4): единственное место, где создаётся
+// TdJsonTransport. Лог TDLib идёт в файл в data-каталоге профиля.
+std::shared_ptr<telega::td::TdTransport> make_tdjson_transport(
+    const std::filesystem::path& log_file) {
+    auto transport = std::make_shared<telega::td::TdJsonTransport>();
+    std::string error;
+    if (!telega::td::set_tdlib_log_file(*transport, log_file, int64_t{16} << 20U, 1, &error)) {
+        throw std::runtime_error("cannot open the TDLib log " + log_file.string() + ": " + error);
+    }
+    return transport;
+}
+
 int run(int argc, char** argv) {
+    telega::app::set_transport_factory(make_tdjson_transport);
+
     CLI::App app{"telega-fs: encrypted FUSE filesystem on top of a private channel"};
     app.set_version_flag("-V,--version", [] {
         return "telega-fs " + std::string{telega::app::version()} + "\nTDLib " + tdlib_version() +
@@ -43,8 +62,32 @@ int run(int argc, char** argv) {
 
     int exit_code = 0;
 
+    telega::app::LoginArgs login_args;
+    auto* login = app.add_subcommand("login", "Log in to Telegram (bot token, user or QR code)");
+    login->add_flag("--bot", login_args.bot, "Log in a bot: the token is read from standard input");
+    login->add_flag("--qr", login_args.qr, "Log in a user account by QR code instead of a code");
+    login->add_flag("--test-dc", login_args.test_dc,
+                    "Use the Telegram test servers (saved as use_test_dc in the profile)");
+    login->callback([&] {
+        login_args.global = global;
+        exit_code = telega::app::run_login(login_args);
+    });
+
+    telega::app::LogoutArgs logout_args;
+    auto* logout = app.add_subcommand("logout", "Log out and delete the Telegram session");
+    logout->callback([&] {
+        logout_args.global = global;
+        exit_code = telega::app::run_logout(logout_args);
+    });
+
     telega::app::InitArgs init_args;
     auto* init = app.add_subcommand("init", "Create a new file system in the profile's store");
+    auto* init_chat = init->add_option("--chat", init_args.chat,
+                                       "Empty existing channel (the only option for a bot)")
+                          ->type_name("ID");
+    init->add_option("--title", init_args.title, "Create a new channel (user accounts only)")
+        ->type_name("TITLE")
+        ->excludes(init_chat);
     init->add_option("--keyfile", init_args.keyfile,
                      "Use a 32-byte key file instead of a passphrase")
         ->type_name("FILE");

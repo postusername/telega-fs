@@ -43,6 +43,11 @@ class Rng {
     uint64_t state_;
 };
 
+// "a,b,c" -> {"a","b","c"} (пустые части пропускаются).
+std::vector<std::string> split_list(const std::string& text);
+// "64KiB", "4MiB", "1GiB", "512" -> байты. Другая единица — std::runtime_error.
+int64_t parse_bytes(const std::string& text);
+
 struct Summary {
     size_t n = 0;
     double median = 0;

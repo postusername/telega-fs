@@ -1,0 +1,87 @@
+tag,metric,value
+session,ids_scanned,265
+session,batches,3
+session,pause_ms,2000
+session,scan_total_s,6.0
+session,batch_ms_median,123
+session,batch_ms_min,68
+session,batch_ms_max,313
+session,flood_events,0
+session,flood_retry_after_total_s,0
+session,net_errors,0
+session,login_ms,15
+session,get_chat_known_ms,2
+session,expected alive/bot_doc,78
+session,returned alive/bot_doc,78
+session,expected alive/bot_idx,9
+session,returned alive/bot_idx,9
+session,expected alive/bot_text,45
+session,returned alive/bot_text,45
+session,expected alive/user_text,3
+session,returned alive/user_text,3
+session,expected beyond/-,100
+session,returned beyond/-,0
+session,expected deleted/bot_doc,13
+session,returned deleted/bot_doc,0
+session,expected deleted/bot_text,5
+session,returned deleted/bot_text,0
+session,expected deleted/user_text,2
+session,returned deleted/user_text,0
+session,expected gap/channel_create_assumed,1
+session,returned gap/channel_create_assumed,1
+session,expected service/messagePinMessage,9
+session,returned service/messagePinMessage,9
+session,verdict alive/bot_doc -> ok,78
+session,verdict alive/bot_idx -> ok,9
+session,verdict alive/bot_text -> ok,45
+session,verdict alive/user_text -> ok,3
+session,verdict beyond/- -> ok,100
+session,verdict deleted/bot_doc -> ok,13
+session,verdict deleted/bot_text -> ok,5
+session,verdict deleted/user_text -> ok,2
+session,verdict gap/channel_create_assumed -> gap_service,1
+session,verdict service/messagePinMessage -> ok,9
+session,alive_recall,100.00 %
+fresh,ids_scanned,265
+fresh,batches,3
+fresh,pause_ms,2000
+fresh,scan_total_s,6.0
+fresh,batch_ms_median,107
+fresh,batch_ms_min,96
+fresh,batch_ms_max,107
+fresh,flood_events,0
+fresh,flood_retry_after_total_s,0
+fresh,net_errors,0
+fresh,login_ms,3732
+fresh,get_chat_known_ms,63
+fresh,expected alive/bot_doc,78
+fresh,returned alive/bot_doc,78
+fresh,expected alive/bot_idx,9
+fresh,returned alive/bot_idx,9
+fresh,expected alive/bot_text,45
+fresh,returned alive/bot_text,45
+fresh,expected alive/user_text,3
+fresh,returned alive/user_text,3
+fresh,expected beyond/-,100
+fresh,returned beyond/-,0
+fresh,expected deleted/bot_doc,13
+fresh,returned deleted/bot_doc,0
+fresh,expected deleted/bot_text,5
+fresh,returned deleted/bot_text,0
+fresh,expected deleted/user_text,2
+fresh,returned deleted/user_text,0
+fresh,expected gap/channel_create_assumed,1
+fresh,returned gap/channel_create_assumed,1
+fresh,expected service/messagePinMessage,9
+fresh,returned service/messagePinMessage,9
+fresh,verdict alive/bot_doc -> ok,78
+fresh,verdict alive/bot_idx -> ok,9
+fresh,verdict alive/bot_text -> ok,45
+fresh,verdict alive/user_text -> ok,3
+fresh,verdict beyond/- -> ok,100
+fresh,verdict deleted/bot_doc -> ok,13
+fresh,verdict deleted/bot_text -> ok,5
+fresh,verdict deleted/user_text -> ok,2
+fresh,verdict gap/channel_create_assumed -> gap_service,1
+fresh,verdict service/messagePinMessage -> ok,9
+fresh,alive_recall,100.00 %

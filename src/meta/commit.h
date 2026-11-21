@@ -114,6 +114,19 @@ struct CommitConfig {
     double checkpoint_ratio = 0.25;
     uint32_t retain_generations = 8;
 
+    // Отсрочка коммита по commit_interval, пока очередь заливки не пуста (SPEC 7.1): не дольше
+    // чем commit_defer_factor · commit_interval с прошлого коммита. Очередь опрашивается раз в
+    // defer_recheck. Остальные условия коммита (commit_every_chunks, fsync, размонтирование)
+    // идут без отсрочки.
+    uint32_t commit_defer_factor = 5;
+    std::chrono::milliseconds defer_recheck{1'000};
+
+    // CAS в шаге 4 (SPEC 7.1): голова канала — 404 или более старый наш блоб, а свой последний
+    // set_head был меньше cas_retry_window назад (кэш TDLib, SPEC 2). Проверка повторяется раз
+    // в cas_retry_period до конца окна, и только потом это конфликт.
+    std::chrono::milliseconds cas_retry_window{90'000};
+    std::chrono::milliseconds cas_retry_period{10'000};
+
     // Задержка повтора фонового коммита после ошибки: retry_min, удваивается до retry_max.
     std::chrono::milliseconds retry_min{1'000};
     std::chrono::milliseconds retry_max{60'000};
@@ -203,6 +216,12 @@ class CommitManager final : public Committer {
     // force_snapshot = 1 и бросает CommitError. Зовёт фоновый поток; открыт для тестов.
     std::optional<TakeStats> take_intermediate();
 
+    // Очередь заливки не пуста? (SPEC 7.1: пока да, коммит по commit_interval откладывается.)
+    // Зовётся из фонового потока без блокировок CommitManager. Vfs ставит пробник после
+    // создания и ДОЛЖЕН снять (пустая функция) до своего уничтожения; снятие ждёт идущего
+    // вызова. Без пробника очередь считается пустой.
+    void set_upload_probe(std::function<bool()> busy);
+
     // Пересчитать сроки фонового потока (после сдвига подменённых часов в тестах).
     void poke();
     // Ждать, пока base_generation не станет ≥ generation (тесты, sync). false — таймаут.
@@ -221,6 +240,9 @@ class CommitManager final : public Committer {
         // Наибольший seq из pending_patchsets, вошедший в блоб (дельта: склеен; снимок: уже в
         // теле). Патчи с большим seq дописал промежуточный забор, шаг 8 их не трогает.
         int64_t max_pending_seq = 0;
+        // false: pin точно не прошёл (set_head вернул permanent). Тогда кэш TDLib ничего не
+        // скрывает, и неподтверждённая попытка разбирается одним чтением головы (SPEC 7.1).
+        bool pin_may_have_passed = true;
     };
     struct CasExpect {
         std::optional<int64_t> msg_id;  // nullopt — канал пуст (первый коммит после init)
@@ -244,6 +266,15 @@ class CommitManager final : public Committer {
     void clear_unconfirmed();
     void append_patch(const Bytes& patch);
     [[nodiscard]] bool take_due() const;
+    [[nodiscard]] bool uploads_busy();
+    // Голова для разбора неподтверждённого pin с повтором в окне кэша TDLib (SPEC 7.1).
+    std::optional<store::HeadInfo> read_head_for_unconfirmed(const Uploaded& up);
+    // CAS шага 4 с повтором после своего pin (SPEC 7.1). true — голова совпала.
+    bool cas_with_retry(const std::optional<store::HeadInfo>& first, const CasExpect& expect);
+    [[nodiscard]] bool is_stale_own_head(const std::optional<store::HeadInfo>& head,
+                                         const CasExpect& expect) const;
+    // Ждать d по часам CommitManager; false — идёт остановка.
+    bool sleep_for(std::chrono::milliseconds d);
     void notify_rows();
     void on_dirty();
     void background_loop();
@@ -271,6 +302,14 @@ class CommitManager final : public Committer {
     // Очередь патчей: порядок забора = порядок записи в pending_patchsets (см. начало файла).
     std::mutex patch_queue_mu_;
 
+    // Под commit_mu_: когда мы последний раз звали set_head (pin мог состояться, даже если
+    // вызов вернул ошибку). Нужно CAS-повтору (SPEC 7.1, шаг 4).
+    std::optional<Clock::time_point> last_pin_;
+
+    std::mutex probe_mu_;  // листовой: под ним зовётся только пробник
+    std::function<bool()> upload_probe_;
+
+    std::atomic<bool> reprobe_{false};  // фону нужна проба очереди заливки сейчас
     std::atomic<bool> read_only_{false};
     std::atomic<uint64_t> base_generation_{0};
     std::atomic<uint64_t> attempts_started_{0};

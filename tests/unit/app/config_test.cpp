@@ -92,6 +92,77 @@ local_dir = "/tmp/telega-local"
     EXPECT_THROW((void)config.profile("missing"), ConfigError);
 }
 
+TEST(ConfigParse, DefaultsMatchSpec) {
+    unset_env("TELEGA_API_ID");
+    unset_env("TELEGA_API_HASH");
+    const auto config = parse_config("[profiles.main]\n");
+    const auto& p = config.profile("main");
+    EXPECT_EQ(p.store, StoreKind::telegram);
+    EXPECT_EQ(p.auth, AuthMode::bot);
+    EXPECT_FALSE(p.use_test_dc);
+    EXPECT_EQ(p.cache_limit, uint64_t{4} << 30U);
+    EXPECT_EQ(p.staging_limit, uint64_t{8} << 30U);
+    EXPECT_EQ(p.sync_timeout, 300s);
+    EXPECT_EQ(p.commit_interval, 60s);
+    EXPECT_EQ(p.commit_every_chunks, 64U);
+    EXPECT_EQ(p.patch_take_rows, 2000U);
+    EXPECT_EQ(p.max_chain, 16U);
+    EXPECT_DOUBLE_EQ(p.checkpoint_ratio, 0.25);
+    EXPECT_EQ(p.send_rate, 12U);
+    EXPECT_EQ(p.send_bytes_rate, uint64_t{224} << 20U);
+    EXPECT_EQ(p.upload_concurrency, 2U);
+    EXPECT_EQ(p.download_concurrency, 4U);
+    EXPECT_EQ(p.album_max_doc_size, uint64_t{8} << 20U);
+    EXPECT_EQ(p.read_pause, 10s);
+    EXPECT_EQ(p.chunk_size, uint64_t{8} << 20U);
+    EXPECT_EQ(p.inline_max, uint64_t{4} << 10U);
+    EXPECT_EQ(p.inline_budget, uint64_t{16} << 20U);
+    EXPECT_EQ(p.pack_threshold, uint64_t{4} << 20U);
+    EXPECT_EQ(p.pack_target, uint64_t{8} << 20U);
+    EXPECT_EQ(p.pack_max_age, 30s);
+}
+
+TEST(ConfigParse, NewTelegramKeys) {
+    const auto config = parse_config(R"(
+[profiles.main]
+send_rate = 18
+send_bytes_rate = "320MiB"
+album_max_doc_size = "4MiB"
+read_pause = "6s"
+)");
+    const auto& p = config.profile("main");
+    EXPECT_EQ(p.send_rate, 18U);
+    EXPECT_EQ(p.send_bytes_rate, uint64_t{320} << 20U);
+    EXPECT_EQ(p.album_max_doc_size, uint64_t{4} << 20U);
+    EXPECT_EQ(p.read_pause, 6s);
+    EXPECT_THROW((void)parse_config("[profiles.a]\nread_pause = 10"), ConfigError);
+    EXPECT_THROW((void)parse_config("[profiles.a]\nread_pause = \"0s\""), ConfigError);
+    EXPECT_THROW((void)parse_config("[profiles.a]\nsend_rate = 0"), ConfigError);
+    EXPECT_THROW((void)parse_config("[profiles.a]\nsend_bytes_rate = \"0\""), ConfigError);
+}
+
+TEST(ConfigParse, PackDefaultsFollowChunkSize) {
+    // Без явных значений pack_* укладываются в маленький chunk_size (SPEC 6.5).
+    const auto small = parse_config("[profiles.a]\nchunk_size = \"1MiB\"\n").profile("a");
+    EXPECT_EQ(small.pack_threshold, uint64_t{512} << 10U);
+    EXPECT_EQ(small.pack_target, uint64_t{1} << 20U);
+    // Явные значения не трогаются.
+    const auto explicit_values =
+        parse_config("[profiles.a]\nchunk_size = \"8MiB\"\npack_threshold = \"1MiB\"\n")
+            .profile("a");
+    EXPECT_EQ(explicit_values.pack_threshold, uint64_t{1} << 20U);
+    EXPECT_EQ(explicit_values.pack_target, uint64_t{8} << 20U);  // не больше chunk_size
+}
+
+TEST(ConfigParse, PackConstraints) {
+    EXPECT_THROW((void)parse_config("[profiles.a]\npack_target = \"32MiB\""), ConfigError);
+    EXPECT_THROW((void)parse_config("[profiles.a]\npack_threshold = \"8MiB\""), ConfigError);
+    EXPECT_THROW((void)parse_config("[profiles.a]\npack_target = \"4MiB\""), ConfigError);
+    EXPECT_NO_THROW((void)parse_config("[profiles.a]\npack_target = \"8MiB\""));
+    EXPECT_NO_THROW(
+        (void)parse_config("[profiles.a]\nchunk_size = \"16MiB\"\npack_target = \"16MiB\""));
+}
+
 TEST(ConfigParse, Rejects) {
     EXPECT_THROW((void)parse_config("bogus = 1"), ConfigError);
     EXPECT_THROW((void)parse_config("[profiles.a]\nunknown_key = 1"), ConfigError);

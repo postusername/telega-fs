@@ -1,0 +1,13 @@
+probe,result
+"getChatPinnedMessage, no pinned messages, right after start, no getChat",error 400: Chat not found
+"getChatPinnedMessage, no pinned messages, after getChat",error 404: Not Found
+"fresh DB, unpin of a message never loaded (round 1)",error 400: Message not found; getMessages returned the message; unpin after getMessages ok
+"fresh DB, unpin of a message never loaded (round 2)",error 400: Message not found; getMessages returned the message; unpin after getMessages ok
+"fresh DB, unpin of a message never loaded (round 3)",error 400: Message not found; getMessages returned the message; unpin after getMessages ok
+"fresh DB, unpin of a message never loaded (round 4)",error 400: Message not found; getMessages returned the message; unpin after getMessages ok
+"bot deletes its own message, rights only:post,edit","deleted, getMessages returns null"
+"bot deletes its own message, rights only:post,edit,delete","deleted, getMessages returns null"
+scan 1..661 (missing),31
+scan 1..661 messageDocument,319
+scan 1..661 messagePinMessage,310
+scan 1..661 messageSupergroupChatCreate,1

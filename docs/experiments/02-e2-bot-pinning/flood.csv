@@ -1,0 +1,3 @@
+time_utc,experiment,what,retry_after_s,event_no
+2026-11-19T16:42:58Z,e2,send,37,1
+2026-11-19T16:50:22Z,e2,unpin,12,1

@@ -1,0 +1,209 @@
+time_utc,event,server_id,kind,detail
+2026-11-19T20:55:29Z,send,2,user_text,e3 user 1
+2026-11-19T20:55:42Z,send,3,user_text,e3 user 2
+2026-11-19T20:55:55Z,send,4,user_text,e3 user 3
+2026-11-19T20:56:08Z,send,5,user_text,e3 user 4
+2026-11-19T20:56:21Z,send,6,user_text,e3 user 5
+2026-11-19T20:56:35Z,delete,3,user_text,ok
+2026-11-19T20:56:48Z,delete,5,user_text,ok
+2026-11-19T20:56:53Z,send,7,bot_doc,7ebbe13543491c0a.bin
+2026-11-19T20:56:56Z,send,8,bot_doc,a708f12d0751a6b9.bin
+2026-11-19T20:57:00Z,send,9,bot_text,e3 bot s9 omega gamma alpha alpha beta gamma beta alpha gamma alpha kappa omega gamma sigma delta
+2026-11-19T20:57:04Z,send,10,bot_doc,b64edb8bf1018328.bin
+2026-11-19T20:57:07Z,send,11,bot_doc,7e10c42c76b3bc06.bin
+2026-11-19T20:57:11Z,send,12,bot_doc,726db234bb371f0c.bin
+2026-11-19T20:57:15Z,send,13,bot_doc,b4501c34121460a2.bin
+2026-11-19T20:57:18Z,send,14,bot_doc,50afb11d45e9f6df.bin
+2026-11-19T20:57:22Z,send,15,bot_doc,8bfbc02420840873.bin
+2026-11-19T20:57:25Z,send,16,bot_text,e3 bot s16 sigma sigma delta delta theta theta alpha beta beta beta omega
+2026-11-19T20:57:29Z,send,17,bot_doc,fa39bd1f10d50f9e.bin
+2026-11-19T20:57:33Z,send,18,bot_doc,77c513feec411372.bin
+2026-11-19T20:57:36Z,send,19,bot_doc,199223f4705d2e70.bin
+2026-11-19T20:57:40Z,send,20,bot_doc,351da09bad7926e4.bin
+2026-11-19T20:57:43Z,send,21,bot_text,e3 bot s21 beta omega theta gamma beta theta kappa alpha kappa theta alpha sigma beta theta sigma sigma sigma omega theta alpha omega kappa sigma
+2026-11-19T20:57:47Z,send,22,bot_idx,0659483e6f58a883.idx
+2026-11-19T20:57:51Z,pin,22,bot_idx,ok
+2026-11-19T20:57:51Z,service,23,messagePinMessage,pinned 22
+2026-11-19T20:57:55Z,send,24,bot_text,e3 bot s24 sigma gamma omega alpha theta sigma theta sigma beta omega beta gamma omega kappa kappa omega delta
+2026-11-19T20:57:58Z,send,25,bot_text,e3 bot s25 theta sigma kappa omega alpha beta gamma theta sigma theta theta alpha alpha beta sigma
+2026-11-19T20:58:02Z,send,26,bot_doc,e2bdd8757dc8c056.bin
+2026-11-19T20:58:06Z,send,27,bot_doc,43219d39eea6bcda.bin
+2026-11-19T20:58:09Z,send,28,bot_doc,f1915817f744be1d.bin
+2026-11-19T20:58:09Z,delete_round,0,-,0
+2026-11-19T20:58:13Z,send,29,bot_doc,8ff2292edb716578.bin
+2026-11-19T20:58:16Z,send,30,bot_doc,805ca928ed6f22cf.bin
+2026-11-19T20:58:20Z,send,31,bot_doc,b7a311f3d730d4ef.bin
+2026-11-19T20:58:23Z,send,32,bot_text,e3 bot s33 alpha alpha gamma omega alpha alpha theta beta kappa delta sigma gamma delta beta omega
+2026-11-19T20:58:27Z,send,33,bot_text,e3 bot s34 theta alpha alpha theta omega kappa theta sigma sigma theta delta beta kappa omega omega beta beta kappa
+2026-11-19T20:58:31Z,send,34,bot_doc,fb66c43d0dfa54d8.bin
+2026-11-19T20:58:34Z,send,35,bot_doc,cad9accd35f1ac38.bin
+2026-11-19T20:58:38Z,send,36,bot_doc,2f26ad1baec54701.bin
+2026-11-19T20:58:41Z,send,37,bot_text,e3 bot s38 omega alpha kappa theta alpha kappa theta sigma beta gamma sigma alpha alpha kappa gamma kappa
+2026-11-19T20:58:45Z,send,38,bot_doc,ad66fc693c24a654.bin
+2026-11-19T20:58:49Z,send,39,bot_idx,93f4e72a735e3ee7.idx
+2026-11-19T20:58:52Z,pin,39,bot_idx,ok
+2026-11-19T20:59:01Z,unpin,22,bot_idx,ok
+2026-11-19T20:59:01Z,service,40,messagePinMessage,pinned 39
+2026-11-19T20:59:05Z,send,41,bot_text,e3 bot s43 sigma alpha sigma gamma sigma kappa omega kappa kappa omega gamma gamma kappa
+2026-11-19T20:59:09Z,send,42,bot_doc,e971a391eb7a89a9.bin
+2026-11-19T20:59:12Z,send,43,bot_text,e3 bot s45 kappa sigma omega theta beta sigma alpha beta gamma
+2026-11-19T20:59:16Z,send,44,bot_doc,f50b0e0907ef6cfd.bin
+2026-11-19T20:59:19Z,send,45,bot_text,e3 bot s47 kappa delta gamma beta alpha alpha sigma gamma gamma beta omega theta beta omega theta beta omega theta
+2026-11-19T20:59:23Z,send,46,bot_text,e3 bot s48 gamma delta gamma theta gamma alpha omega theta kappa sigma alpha sigma
+2026-11-19T20:59:26Z,send,47,bot_doc,e4cb49c51e78088f.bin
+2026-11-19T20:59:30Z,send,48,bot_text,e3 bot s50 beta kappa beta beta
+2026-11-19T20:59:33Z,send,49,bot_doc,7bbc433cc80dd801.bin
+2026-11-19T20:59:37Z,send,50,bot_text,e3 bot s52 sigma theta alpha omega alpha alpha omega theta theta kappa omega sigma omega theta sigma sigma theta kappa beta alpha delta omega sigma
+2026-11-19T20:59:45Z,delete,19,bot_doc,ok
+2026-11-19T20:59:45Z,delete,14,bot_doc,ok
+2026-11-19T20:59:45Z,delete,7,bot_doc,ok
+2026-11-19T20:59:45Z,delete_round,0,-,3
+2026-11-19T20:59:49Z,send,51,bot_text,e3 bot s57 theta theta beta theta delta beta theta theta delta theta
+2026-11-19T20:59:52Z,send,52,bot_doc,4ca3cd2268a45a92.bin
+2026-11-19T20:59:56Z,send,53,bot_doc,449e35e5c9cca872.bin
+2026-11-19T21:00:00Z,send,54,bot_doc,e4bc6c571f78371f.bin
+2026-11-19T21:00:03Z,send,55,bot_doc,43f0d92c7317c0b1.bin
+2026-11-19T21:00:07Z,send,56,bot_idx,a5477c54a1bba120.idx
+2026-11-19T21:00:10Z,pin,56,bot_idx,ok
+2026-11-19T21:00:19Z,unpin,39,bot_idx,ok
+2026-11-19T21:00:19Z,service,57,messagePinMessage,pinned 56
+2026-11-19T21:00:23Z,send,58,bot_doc,40e2327f01cafba1.bin
+2026-11-19T21:00:27Z,send,59,bot_text,e3 bot s66 omega kappa sigma sigma sigma delta beta omega alpha theta gamma kappa kappa theta omega
+2026-11-19T21:00:30Z,send,60,bot_text,e3 bot s67 theta beta kappa alpha delta gamma beta gamma delta
+2026-11-19T21:00:34Z,send,61,bot_doc,7e2b6f3483d43171.bin
+2026-11-19T21:00:37Z,send,62,bot_doc,a56d3ada528a30d1.bin
+2026-11-19T21:00:41Z,send,63,bot_doc,b6270079789d95f0.bin
+2026-11-19T21:00:45Z,send,64,bot_doc,f2d35ab81a1fe93c.bin
+2026-11-19T21:00:48Z,send,65,bot_doc,61eaf1ba50b7844a.bin
+2026-11-19T21:00:52Z,send,66,bot_doc,cf5be84b0650247b.bin
+2026-11-19T21:00:55Z,send,67,bot_text,e3 bot s74 theta omega alpha delta alpha omega kappa kappa gamma delta alpha theta beta theta omega delta theta sigma delta
+2026-11-19T21:01:00Z,send,68,bot_doc,ef1bd3557a3aa8de.bin
+2026-11-19T21:01:03Z,send,69,bot_doc,784573c0146163d2.bin
+2026-11-19T21:01:07Z,send,70,bot_text,e3 bot s77 kappa omega delta gamma omega gamma delta delta beta kappa
+2026-11-19T21:01:10Z,send,71,bot_doc,b2d3494becb2228e.bin
+2026-11-19T21:01:14Z,send,72,bot_doc,9549fa502f40158e.bin
+2026-11-19T21:01:22Z,delete,38,bot_doc,ok
+2026-11-19T21:01:22Z,delete,21,bot_text,ok
+2026-11-19T21:01:22Z,delete,37,bot_text,ok
+2026-11-19T21:01:22Z,delete_round,0,-,3
+2026-11-19T21:01:26Z,send,73,bot_idx,f2671e40cb1b6d28.idx
+2026-11-19T21:01:29Z,pin,73,bot_idx,ok
+2026-11-19T21:01:38Z,unpin,56,bot_idx,ok
+2026-11-19T21:01:38Z,service,74,messagePinMessage,pinned 73
+2026-11-19T21:01:42Z,send,75,bot_doc,c92d58e753a081bc.bin
+2026-11-19T21:01:46Z,send,76,bot_doc,c7d92e695edef6de.bin
+2026-11-19T21:01:49Z,send,77,bot_text,e3 bot s89 sigma kappa alpha beta theta kappa
+2026-11-19T21:01:53Z,send,78,bot_doc,7a9ab73519821ed1.bin
+2026-11-19T21:01:56Z,send,79,bot_text,e3 bot s91 delta beta theta kappa kappa theta alpha theta sigma alpha gamma sigma alpha kappa omega kappa theta sigma sigma delta omega
+2026-11-19T21:02:00Z,send,80,bot_doc,cf47bef692c8dcce.bin
+2026-11-19T21:02:03Z,send,81,bot_text,e3 bot s93 omega kappa theta theta alpha gamma theta kappa beta delta delta alpha
+2026-11-19T21:02:07Z,send,82,bot_text,e3 bot s94 beta omega gamma beta theta omega beta omega delta omega kappa omega beta gamma delta kappa theta
+2026-11-19T21:02:11Z,send,83,bot_text,e3 bot s95 kappa beta kappa alpha delta gamma delta delta kappa kappa alpha sigma sigma gamma alpha kappa theta omega theta alpha sigma beta
+2026-11-19T21:02:14Z,send,84,bot_doc,79ee4f3af5b72ec2.bin
+2026-11-19T21:02:18Z,send,85,bot_doc,ac5ab5583e34871f.bin
+2026-11-19T21:02:21Z,send,86,bot_doc,ee0595ba497075dd.bin
+2026-11-19T21:02:25Z,send,87,bot_doc,7473028cf3863b1b.bin
+2026-11-19T21:02:28Z,send,88,bot_doc,46636b3497507268.bin
+2026-11-19T21:02:32Z,send,89,bot_doc,7c3550c153c43ed1.bin
+2026-11-19T21:02:35Z,send,90,bot_idx,db909f0260ac5c07.idx
+2026-11-19T21:02:39Z,pin,90,bot_idx,ok
+2026-11-19T21:02:47Z,unpin,73,bot_idx,ok
+2026-11-19T21:02:47Z,service,91,messagePinMessage,pinned 90
+2026-11-19T21:02:52Z,send,92,bot_doc,bc31368c7d984882.bin
+2026-11-19T21:02:55Z,send,93,bot_text,e3 bot s106 gamma beta delta sigma delta theta gamma kappa theta gamma gamma
+2026-11-19T21:02:59Z,send,94,bot_doc,1d283990328793e5.bin
+2026-11-19T21:03:03Z,send,95,bot_doc,1639f8315b824e68.bin
+2026-11-19T21:03:06Z,send,96,bot_doc,8601364c6ec9910e.bin
+2026-11-19T21:03:14Z,delete,54,bot_doc,ok
+2026-11-19T21:03:14Z,delete,66,bot_doc,ok
+2026-11-19T21:03:14Z,delete,28,bot_doc,ok
+2026-11-19T21:03:14Z,delete_round,0,-,3
+2026-11-19T21:03:18Z,send,97,bot_doc,6e518e5c3f6024cb.bin
+2026-11-19T21:03:22Z,send,98,bot_doc,d2720bbf1c57b870.bin
+2026-11-19T21:03:25Z,send,99,bot_doc,6bc047fc1ae8b3b1.bin
+2026-11-19T21:03:29Z,send,100,bot_doc,f352d478e9d4d6c2.bin
+2026-11-19T21:03:52Z,send,101,bot_doc,2386d71cc1406b5a.bin
+2026-11-19T21:03:56Z,send,102,bot_doc,078d27fa856debda.bin
+2026-11-19T21:03:59Z,send,103,bot_text,e3 bot s120 delta omega kappa kappa kappa alpha gamma theta theta kappa
+2026-11-19T21:04:02Z,send,104,bot_text,e3 bot s121 theta alpha omega gamma sigma theta theta beta sigma gamma alpha theta gamma omega kappa gamma sigma omega theta alpha alpha sigma alpha theta beta
+2026-11-19T21:04:06Z,send,105,bot_text,e3 bot s122 sigma alpha delta kappa delta sigma beta sigma alpha kappa delta theta beta theta gamma alpha delta delta theta gamma delta sigma
+2026-11-19T21:04:09Z,send,106,bot_doc,964c31e59937be55.bin
+2026-11-19T21:04:13Z,send,107,bot_idx,0b64ffa13213bdd3.idx
+2026-11-19T21:04:16Z,pin,107,bot_idx,ok
+2026-11-19T21:04:20Z,unpin_fail,90,bot_idx,400: Message not found
+2026-11-19T21:04:20Z,service,108,messagePinMessage,pinned 107
+2026-11-19T21:04:24Z,send,109,bot_text,e3 bot s127 omega gamma theta sigma omega kappa gamma sigma gamma delta sigma delta alpha
+2026-11-19T21:04:28Z,send,110,bot_text,e3 bot s128 alpha delta sigma omega delta
+2026-11-19T21:04:31Z,send,111,bot_doc,0168904aeda39adc.bin
+2026-11-19T21:04:35Z,send,112,bot_text,e3 bot s130 omega delta sigma beta kappa beta alpha gamma
+2026-11-19T21:04:38Z,send,113,bot_doc,406c889b555eb0be.bin
+2026-11-19T21:04:42Z,send,114,bot_doc,607d0fe9229e3335.bin
+2026-11-19T21:04:45Z,send,115,bot_doc,91d86eae845646a6.bin
+2026-11-19T21:04:48Z,send,116,bot_text,e3 bot s134 sigma omega kappa delta beta omega delta gamma gamma beta beta delta kappa alpha delta kappa
+2026-11-19T21:04:52Z,send,117,bot_doc,687f2985c98ce926.bin
+2026-11-19T21:04:55Z,send,118,bot_doc,bf097d9ae34f8614.bin
+2026-11-19T21:05:03Z,delete,60,bot_text,ok
+2026-11-19T21:05:03Z,delete,87,bot_doc,ok
+2026-11-19T21:05:03Z,delete,17,bot_doc,ok
+2026-11-19T21:05:03Z,delete_round,0,-,3
+2026-11-19T21:05:07Z,send,119,bot_text,e3 bot s141 alpha alpha kappa theta kappa kappa gamma delta alpha beta theta beta gamma kappa kappa delta kappa alpha beta omega theta
+2026-11-19T21:05:10Z,send,120,bot_text,e3 bot s142 gamma beta omega delta
+2026-11-19T21:05:14Z,send,121,bot_doc,f423a23d21690cd7.bin
+2026-11-19T21:05:17Z,send,122,bot_text,e3 bot s144 gamma kappa gamma sigma kappa omega omega gamma sigma sigma gamma omega
+2026-11-19T21:05:20Z,send,123,bot_doc,d40346557687a18e.bin
+2026-11-19T21:05:24Z,send,124,bot_idx,fa21f6c077717c6d.idx
+2026-11-19T21:05:27Z,pin,124,bot_idx,ok
+2026-11-19T21:05:31Z,unpin,107,bot_idx,ok
+2026-11-19T21:05:31Z,service,125,messagePinMessage,pinned 124
+2026-11-19T21:05:36Z,send,126,bot_text,e3 bot s149 gamma kappa sigma delta theta theta alpha alpha theta kappa
+2026-11-19T21:05:39Z,send,127,bot_text,e3 bot s150 beta alpha kappa gamma beta sigma sigma sigma alpha gamma beta gamma gamma sigma kappa theta
+2026-11-19T21:05:42Z,send,128,bot_doc,bc2e61597d00cf37.bin
+2026-11-19T21:05:46Z,send,129,bot_text,e3 bot s152 theta gamma delta delta delta
+2026-11-19T21:05:49Z,send,130,bot_text,e3 bot s153 sigma theta theta kappa delta theta
+2026-11-19T21:06:17Z,send,131,bot_text,e3 bot s154 gamma theta alpha gamma omega beta beta kappa omega delta theta alpha alpha gamma gamma gamma sigma
+2026-11-19T21:06:20Z,send,132,bot_text,e3 bot s155 theta omega alpha theta omega alpha sigma kappa theta sigma sigma theta gamma sigma omega omega gamma
+2026-11-19T21:06:24Z,send,133,bot_text,e3 bot s156 omega beta kappa beta theta
+2026-11-19T21:06:27Z,send,134,bot_text,e3 bot s157 theta beta omega theta kappa beta alpha omega beta beta delta theta alpha alpha
+2026-11-19T21:06:31Z,send,135,bot_doc,3401a051a04ae9b3.bin
+2026-11-19T21:06:34Z,send,136,bot_doc,c7c376a95ef845d5.bin
+2026-11-19T21:06:37Z,send,137,bot_doc,96cb8b9abb139359.bin
+2026-11-19T21:06:41Z,send,138,bot_text,e3 bot s161 sigma gamma sigma sigma sigma omega sigma alpha beta alpha theta theta theta delta delta gamma alpha gamma
+2026-11-19T21:06:44Z,send,139,bot_text,e3 bot s162 delta sigma gamma theta
+2026-11-19T21:06:48Z,send,140,bot_doc,f047dfa93ac91738.bin
+2026-11-19T21:06:55Z,delete,35,bot_doc,ok
+2026-11-19T21:06:55Z,delete,58,bot_doc,ok
+2026-11-19T21:06:55Z,delete,45,bot_text,ok
+2026-11-19T21:06:55Z,delete_round,0,-,3
+2026-11-19T21:07:00Z,send,141,bot_idx,cbe7d1b984c1dd8b.idx
+2026-11-19T21:07:03Z,pin,141,bot_idx,ok
+2026-11-19T21:07:15Z,unpin,124,bot_idx,ok
+2026-11-19T21:07:15Z,service,142,messagePinMessage,pinned 141
+2026-11-19T21:07:20Z,send,143,bot_text,e3 bot s171 theta alpha sigma beta gamma gamma theta delta beta kappa sigma delta gamma omega omega beta theta delta omega delta sigma theta theta omega
+2026-11-19T21:07:23Z,send,144,bot_doc,d237d6acabe1613f.bin
+2026-11-19T21:07:26Z,send,145,bot_text,e3 bot s173 sigma alpha sigma
+2026-11-19T21:07:30Z,send,146,bot_doc,d5e2ef907cc38c06.bin
+2026-11-19T21:07:33Z,send,147,bot_text,e3 bot s175 beta alpha sigma beta sigma delta kappa gamma omega theta theta kappa
+2026-11-19T21:07:37Z,send,148,bot_doc,fd59ed2983207f53.bin
+2026-11-19T21:07:40Z,send,149,bot_doc,5396f6fec8fa7edb.bin
+2026-11-19T21:07:43Z,send,150,bot_doc,3a05f88566a9e842.bin
+2026-11-19T21:07:47Z,send,151,bot_text,e3 bot s179 kappa omega alpha kappa beta alpha sigma kappa alpha theta sigma sigma theta alpha alpha delta alpha theta
+2026-11-19T21:07:50Z,send,152,bot_doc,b89b9ef05ef9069f.bin
+2026-11-19T21:07:54Z,send,153,bot_text,e3 bot s181 gamma omega omega
+2026-11-19T21:07:57Z,send,154,bot_doc,db41001aeeb505d2.bin
+2026-11-19T21:08:00Z,send,155,bot_doc,39352a3c1f216ee5.bin
+2026-11-19T21:08:04Z,send,156,bot_doc,70649287b4b26307.bin
+2026-11-19T21:08:07Z,send,157,bot_doc,c5ae7133bac238d3.bin
+2026-11-19T21:08:11Z,send,158,bot_idx,7141e10e31d48e90.idx
+2026-11-19T21:08:14Z,pin,158,bot_idx,ok
+2026-11-19T21:08:18Z,unpin,141,bot_idx,ok
+2026-11-19T21:08:18Z,service,159,messagePinMessage,pinned 158
+2026-11-19T21:08:22Z,send,160,bot_doc,feae7fd3d55c6057.bin
+2026-11-19T21:08:26Z,send,161,bot_doc,494ddd4c27c5ea20.bin
+2026-11-19T21:08:29Z,send,162,bot_doc,ab691c2cec633679.bin
+2026-11-19T21:08:33Z,send,163,bot_doc,64f23c43c6bb687b.bin
+2026-11-19T21:08:36Z,send,164,bot_doc,d1fa6126a8456a4e.bin
+2026-11-19T21:08:44Z,delete,25,bot_text,ok
+2026-11-19T21:08:44Z,delete,115,bot_doc,ok
+2026-11-19T21:08:44Z,delete,44,bot_doc,ok
+2026-11-19T21:08:44Z,delete_round,0,-,3
+2026-11-19T21:08:48Z,send,165,bot_doc,d596c121123d509f.bin

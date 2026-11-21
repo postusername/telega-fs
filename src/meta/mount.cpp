@@ -4,8 +4,10 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <chrono>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -450,6 +452,45 @@ void MountedFs::unmount() {
     }
 }
 
+namespace {
+
+// Голова канала для монтирования. Если локально известна голова H (индекс и состояние на месте),
+// а канал отдал «нет головы» или голову старше H, это, скорее всего, кэш TDLib (SPEC 2, 7.2
+// шаг 4): чтение повторяется в пределах options.stale_head_window. Иначе ответ берётся как есть.
+std::optional<store::HeadInfo> read_head_for_mount(store::Store& store, const FsPaths& paths,
+                                                   const MountOptions& options) {
+    auto head = store.read_head();
+    if (options.stale_head_window <= std::chrono::milliseconds{0} ||
+        !std::filesystem::exists(paths.index_db()) || !std::filesystem::exists(paths.state_db())) {
+        return head;
+    }
+    int64_t local_head = 0;
+    try {
+        StateStore state{paths.state_db()};
+        if (state.get_int_or(state_key::base_generation, 0) > 0) {
+            local_head = state.get_int_or(state_key::head_msg_id, 0);
+        }
+    } catch (const std::exception&) {
+        return head;  // состояние повреждено: разберёт основной путь монтирования
+    }
+    const auto behind = [&] { return !head || head->msg_id < local_head; };
+    if (local_head == 0 || !behind()) {
+        return head;
+    }
+    const auto until = std::chrono::steady_clock::now() + options.stale_head_window;
+    while (behind() && std::chrono::steady_clock::now() < until) {
+        spdlog::info(
+            "mount: the channel head is {} the local head (TDLib cache?), checking again in {} s",
+            head ? "older than" : "missing, but there is",
+            options.stale_head_period.count() / 1000);
+        std::this_thread::sleep_for(options.stale_head_period);
+        head = store.read_head();
+    }
+    return head;
+}
+
+}  // namespace
+
 std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
                                     const MountOptions& options) {
     crypto::init();
@@ -457,7 +498,7 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     const bool ro = options.read_only;
 
     // Шаг 4, заголовок головы (без аутентификации: нужен для KDF на новой машине).
-    const auto head_info = store.read_head();
+    const auto head_info = read_head_for_mount(store, paths, options);
     if (!head_info) {
         throw MountError(MountErrorKind::no_head,
                          "the channel has no head (no pinned message): run 'telega-fs init', "
@@ -472,22 +513,30 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     }
     const FsUuid fs_uuid = claimed.fs_uuid;
 
-    // Шаг 1: ключи. Есть keyring — им; нет — KDF и wrapped_master из заголовка головы.
-    std::optional<crypto::KeyringFile> keyring;
+    // Шаг 1: ключи. Есть keyring с ФС — им; keyring без ФС (login до init, SPEC 11) даёт только
+    // tdlib_db_key и KEK, а master_key разворачивается из головы канала; keyring нет — KDF и
+    // wrapped_master тоже из заголовка головы.
+    std::optional<crypto::KeyringFile> keyring;  // с ФС
+    std::optional<crypto::KeyringFile> bare;     // без ФС
     if (std::filesystem::exists(paths.keyring())) {
+        crypto::KeyringFile loaded;
         try {
-            keyring = crypto::load_keyring(paths.keyring());
+            loaded = crypto::load_keyring(paths.keyring());
         } catch (const crypto::CorruptError& e) {
             throw MountError(MountErrorKind::local_state,
                              std::string("local keyring: ") + e.what());
         }
-        if (keyring->fs_uuid != fs_uuid) {
+        if (!crypto::keyring_has_fs(loaded)) {
+            bare = loaded;
+        } else if (loaded.fs_uuid != fs_uuid) {
             throw MountError(MountErrorKind::foreign_fs,
                              "the channel holds a different file system than the local profile");
+        } else {
+            keyring = loaded;
         }
     }
-    const crypto::KdfParams kdf = keyring ? keyring->kdf : claimed.kdf;
-    const crypto::WrappedKey wrapped = keyring ? keyring->wrapped_master : claimed.wrapped_master;
+    crypto::KdfParams kdf = keyring ? keyring->kdf : claimed.kdf;
+    crypto::WrappedKey wrapped = keyring ? keyring->wrapped_master : claimed.wrapped_master;
     if (!keyring && kdf.alg == crypto::KdfAlg::argon2id13 &&
         (kdf.opslimit > crypto_pwhash_OPSLIMIT_SENSITIVE ||
          kdf.memlimit > crypto_pwhash_MEMLIMIT_SENSITIVE)) {
@@ -496,9 +545,37 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
         throw MountError(MountErrorKind::corrupt,
                          "KDF parameters in the head header exceed the allowed limits");
     }
-    const crypto::Key kek = kek_from(options.key, kdf);
     std::optional<crypto::Key> master;
     crypto::Key tdlib_db;
+    std::optional<crypto::Key> bare_kek;  // KEK keyring без ФС: им обернётся master_key
+    if (bare) {
+        // Пароль должен подойти к обоим: к keyring (по wrapped_tdlib) и к голове канала. Вид
+        // источника (пароль или keyfile) тоже один на оба (SPEC 11).
+        const bool keyfile_given = !options.key.keyfile.empty();
+        const bool keyring_keyfile = bare->kdf.alg == crypto::KdfAlg::keyfile;
+        if (keyfile_given != keyring_keyfile) {
+            throw MountError(MountErrorKind::bad_key_source,
+                             keyring_keyfile
+                                 ? "the local keyring is protected by a keyfile, not a passphrase"
+                                 : "the local keyring is protected by a passphrase, not a keyfile");
+        }
+        if ((claimed.kdf.alg == crypto::KdfAlg::keyfile) != keyring_keyfile) {
+            throw MountError(
+                MountErrorKind::bad_key_source,
+                std::string("the local keyring is protected by ") +
+                    (keyring_keyfile ? "a keyfile" : "a passphrase") +
+                    ", but the file system in the channel by " +
+                    (keyring_keyfile ? "a passphrase" : "a keyfile") +
+                    ": the keyring and the file system must use one passphrase or keyfile");
+        }
+        bare_kek = kek_from(options.key, bare->kdf);
+        const auto tdlib = crypto::unlock_tdlib_key(*bare, *bare_kek);
+        if (!tdlib) {
+            throw MountError(MountErrorKind::wrong_password, "wrong passphrase or keyfile");
+        }
+        tdlib_db = *tdlib;
+    }
+    const crypto::Key kek = kek_from(options.key, kdf);
     if (keyring) {
         auto unlocked = crypto::unlock_keyring(*keyring, kek);
         if (unlocked) {
@@ -507,7 +584,9 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
         }
     } else {
         master = crypto::unwrap_key(kek, wrapped);
-        tdlib_db = crypto::Key::random();
+        if (!bare) {
+            tdlib_db = crypto::Key::random();
+        }
     }
     if (!master) {
         throw MountError(MountErrorKind::wrong_password, "wrong passphrase or keyfile");
@@ -522,13 +601,22 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     }
     const ChainBlob head = open_head(sub.index, fs_uuid, head_info->msg_id, head_blob);
     const uint64_t g_r = head.header.generation;
-    if (!keyring) {
-        // Голова подлинная: можно сохранить keyring с тем же wrapped_master, что в заголовке.
-        crypto::save_keyring(paths.keyring(),
-                             crypto::KeyringFile{.fs_uuid = fs_uuid,
-                                                 .kdf = kdf,
-                                                 .wrapped_master = wrapped,
-                                                 .wrapped_tdlib = crypto::wrap_key(kek, tdlib_db)});
+    // Голова подлинная. keyring с ФС сохраняется позже, после проверки локального состояния
+    // (SPEC 11): иначе он привязался бы к ФС, с которой профиль всё равно не смонтируется. В
+    // --ro keyring не меняется вовсе, master_key остаётся только в памяти (SPEC 7.2).
+    std::optional<crypto::KeyringFile> keyring_to_save;
+    if (bare) {
+        // master_key обёрнут KEK этого keyring (SPEC 11). Блобы дальше несут KDF и
+        // wrapped_master из keyring, как при обычном пути.
+        keyring_to_save = crypto::attach_fs(*bare, fs_uuid, *bare_kek, *master);
+        kdf = keyring_to_save->kdf;
+        wrapped = keyring_to_save->wrapped_master;
+    } else if (!keyring) {
+        // Можно сохранить keyring с тем же wrapped_master, что в заголовке.
+        keyring_to_save = crypto::KeyringFile{.fs_uuid = fs_uuid,
+                                              .kdf = kdf,
+                                              .wrapped_master = wrapped,
+                                              .wrapped_tdlib = crypto::wrap_key(kek, tdlib_db)};
     }
 
     // Локальное состояние.
@@ -668,6 +756,9 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     if (fs->params_.fs_uuid != fs_uuid) {
         throw MountError(MountErrorKind::foreign_fs,
                          "local index belongs to a different file system than the channel");
+    }
+    if (keyring_to_save && !ro) {
+        crypto::save_keyring(paths.keyring(), *keyring_to_save);
     }
 
     if (!ro) {

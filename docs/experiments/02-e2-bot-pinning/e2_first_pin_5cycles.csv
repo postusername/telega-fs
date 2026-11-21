@@ -1,0 +1,6 @@
+set,phase,cycle,head_ok,full_ok,send_ok,pin_ok,get_ok,seen_immediately,unpin_ok,send_ms,pin_ms,get_ms,lag_ms,unpin_ms,total_ms,flood,error_step,error
+full,main,1,1,0,1,1,1,0,-,380.9,119.7,0.5,55121.7,0.0,55623.4,0,,
+full,main,2,1,1,1,1,1,1,1,370.3,147.6,0.8,0.0,72.1,591.1,0,,
+full,main,3,1,1,1,1,1,1,1,189.0,108.8,0.6,0.0,3195.8,6003.5,0,,
+full,main,4,1,1,1,1,1,1,1,419.3,115.9,1.0,0.0,80.5,617.0,0,,
+full,main,5,1,1,1,1,1,1,1,237.4,3193.9,1.0,0.0,67.0,5982.6,0,,

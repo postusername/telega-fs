@@ -1,0 +1,5 @@
+series,group,size_bytes,parallel,result,max_clean_rate,flood_rate,flood_retry_s,bandwidth_bound_rate,steps_run,started_utc,ended_utc,deleted,note
+fail-albums,10,0,1,completed,,,,,18,2026-11-20T19:27:02Z,2026-11-20T19:41:55Z,108,
+single-1MiB-p2,1,1048576,2,flood,18,20,3,,4,2026-11-20T19:51:55Z,2026-11-20T20:26:45Z,513,
+album-16MiB-p2,10,16777216,2,flood,20,25,8,,4,2026-11-20T20:36:45Z,2026-11-20T21:12:15Z,569,
+album-1MiB-p2,10,1048576,2,flood,80,120,5,,5,2026-11-20T21:22:15Z,2026-11-20T22:04:20Z,1540,

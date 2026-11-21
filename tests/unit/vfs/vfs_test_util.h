@@ -147,8 +147,9 @@ class VfsEnv {
 
     Vfs& start(VfsOptions o = fast_options()) {
         options = o;
-        vfs = std::make_unique<Vfs>(*meta, *state, *store, committer, keys,
-                                    VfsPaths{staging(), tmp()}, o);
+        vfs = std::make_unique<Vfs>(*meta, *state,
+                                    override_store != nullptr ? *override_store : *store, committer,
+                                    keys, VfsPaths{staging(), tmp()}, o);
         return *vfs;
     }
 
@@ -223,6 +224,8 @@ class VfsEnv {
     crypto::SubKeys keys;
     FakeCommitter committer;
     std::unique_ptr<store::LocalDirStore> store;
+    // Если задан, Vfs работает с ним, а не с LocalDirStore (например, с TelegramStore на фейке).
+    store::Store* override_store = nullptr;
     std::unique_ptr<meta::MetaStore> meta;
     std::unique_ptr<meta::StateStore> state;
     VfsOptions options;

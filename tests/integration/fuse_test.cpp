@@ -169,12 +169,16 @@ TEST_F(FuseTest, InitTwiceAndTelegramStoreAreRefused) {
     ProfileSpec tg;
     tg.store = "telegram";
     Env t{tg};
+    // Профиль Telegram без login (M2): init и mount отказывают с понятной подсказкой, без сети.
     r = t.run({"init"});
     EXPECT_NE(r.exit.code, 0);
-    EXPECT_NE(r.output.find("implemented in M2"), std::string::npos) << r.output;
+    EXPECT_NE(r.output.find("--chat ID"), std::string::npos) << r.output;
+    r = t.run({"init", "--chat", "-1001234567890"});
+    EXPECT_NE(r.exit.code, 0);
+    EXPECT_NE(r.output.find("telega-fs login"), std::string::npos) << r.output;
     r = t.run({"mount", t.mountpoint().string()});
     EXPECT_NE(r.exit.code, 0);
-    EXPECT_NE(r.output.find("implemented in M2"), std::string::npos) << r.output;
+    EXPECT_NE(r.output.find("telega-fs login"), std::string::npos) << r.output;
 }
 
 TEST_F(FuseTest, PassphraseProfile) {

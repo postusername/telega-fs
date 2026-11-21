@@ -18,6 +18,43 @@ using store::StoreOp;
 using test::CommitEnv;
 using test::normalized;
 
+// Store, который первые `hidden` вызовов read_head отвечает заданной старой головой (или 404),
+// как TDLib с кэшем ChannelFull сразу после init или размонтирования (SPEC 2).
+class StaleReadStore final : public store::Store {
+  public:
+    StaleReadStore(store::Store& inner, int hidden, std::optional<store::HeadInfo> stale)
+        : inner_(inner), hidden_(hidden), stale_(std::move(stale)) {}
+
+    [[nodiscard]] int head_reads() const { return reads_; }
+
+    store::ChunkRef put_chunk(const std::filesystem::path& f) override {
+        return inner_.put_chunk(f);
+    }
+    void read_range(const store::ChunkRef& r, uint64_t off, std::span<std::byte> out) override {
+        inner_.read_range(r, off, out);
+    }
+    void delete_messages(std::span<const int64_t> ids) override { inner_.delete_messages(ids); }
+    std::optional<store::HeadInfo> read_head() override {
+        ++reads_;
+        if (hidden_ > 0) {
+            --hidden_;
+            return stale_;
+        }
+        return inner_.read_head();
+    }
+    Bytes read_index(int64_t id) override { return inner_.read_index(id); }
+    int64_t put_index(const std::filesystem::path& f) override { return inner_.put_index(f); }
+    void set_head(int64_t new_id, std::optional<int64_t> old_id) override {
+        inner_.set_head(new_id, old_id);
+    }
+
+  private:
+    store::Store& inner_;
+    int hidden_;
+    std::optional<store::HeadInfo> stale_;
+    int reads_ = 0;
+};
+
 class Mount : public CommitEnv {
   protected:
     static void commit_change(MountedFs& fs, std::string_view name) {
@@ -37,6 +74,17 @@ class Mount : public CommitEnv {
     MountError mount_error(const FsPaths& paths, const std::optional<MountOptions>& o = {}) {
         try {
             mount(paths, o);
+        } catch (const MountError& e) {
+            return e;
+        }
+        ADD_FAILURE() << "mount did not fail";
+        return {MountErrorKind::local_state, "none"};
+    }
+
+    static MountError mount_error_with(store::Store& store, const FsPaths& paths,
+                                       const MountOptions& o) {
+        try {
+            mount_fs(store, paths, o);
         } catch (const MountError& e) {
             return e;
         }
@@ -474,6 +522,88 @@ TEST_F(Mount, RolledBackHeadIsRefused) {
     EXPECT_EQ(remote_state(), dump_a);
     fa->unmount();
     EXPECT_EQ(mount(a_)->report().situation, MountSituation::same_generation);
+}
+
+// --- кэш TDLib: голова не видна сразу после init или размонтирования (SPEC 2, 7.2 шаг 4) ---
+
+TEST_F(Mount, StaleEmptyHeadIsRetriedWhenTheLocalHeadIsKnown) {
+    init();
+    {
+        auto fs = mount(a_);  // локальное состояние с головой поколения 1
+        fs->unmount();
+    }
+    StaleReadStore stale{*store_, 3, std::nullopt};
+    MountOptions o = mount_options();
+    o.stale_head_window = std::chrono::seconds{5};
+    o.stale_head_period = std::chrono::milliseconds{1};
+    auto fs = mount_fs(stale, a_, o);
+    EXPECT_EQ(fs->report().situation, MountSituation::same_generation);
+    EXPECT_EQ(stale.head_reads(), 4);  // три пустых ответа и настоящая голова
+    fs->unmount();
+}
+
+TEST_F(Mount, StaleOlderHeadIsRetriedWhenTheLocalHeadIsKnown) {
+    init();
+    int64_t first = 0;
+    std::optional<store::HeadInfo> old_head;
+    {
+        auto fs = mount(a_);
+        old_head = test::must(store_->read_head());
+        first = old_head->msg_id;
+        commit_change(*fs, "f1");
+        fs->unmount();
+    }
+    ASSERT_GT(test::must(store_->read_head()).msg_id, first);
+    StaleReadStore stale{*store_, 2, old_head};
+    MountOptions o = mount_options();
+    o.stale_head_window = std::chrono::seconds{5};
+    o.stale_head_period = std::chrono::milliseconds{1};
+    auto fs = mount_fs(stale, a_, o);
+    EXPECT_EQ(fs->report().situation, MountSituation::same_generation);
+    EXPECT_EQ(fs->report().remote_generation, 2U);
+    EXPECT_EQ(stale.head_reads(), 3);
+    fs->unmount();
+}
+
+TEST_F(Mount, StaleHeadThatNeverClearsFailsAfterTheWindow) {
+    init();
+    {
+        auto fs = mount(a_);
+        fs->unmount();
+    }
+    StaleReadStore stale{*store_, 1'000'000, std::nullopt};
+    MountOptions o = mount_options();
+    o.stale_head_window = std::chrono::milliseconds{50};
+    o.stale_head_period = std::chrono::milliseconds{5};
+    try {
+        mount_fs(stale, a_, o);
+        FAIL() << "mount did not fail";
+    } catch (const MountError& e) {
+        EXPECT_EQ(e.kind(), MountErrorKind::no_head);
+    }
+    EXPECT_GT(stale.head_reads(), 2);
+    EXPECT_LT(stale.head_reads(), 1000);
+}
+
+TEST_F(Mount, StaleHeadIsNotRetriedWithoutAWindowOrALocalHead) {
+    init();
+    {
+        auto fs = mount(a_);
+        fs->unmount();
+    }
+    {  // окно 0 (по умолчанию, LocalDirStore): ответ принимается как есть
+        StaleReadStore stale{*store_, 1'000'000, std::nullopt};
+        EXPECT_EQ(mount_error_with(stale, a_, mount_options()).kind(), MountErrorKind::no_head);
+        EXPECT_EQ(stale.head_reads(), 1);
+    }
+    {  // новая машина: локальной головы нет, ждать нечего
+        StaleReadStore stale{*store_, 1'000'000, std::nullopt};
+        MountOptions o = mount_options();
+        o.stale_head_window = std::chrono::seconds{5};
+        o.stale_head_period = std::chrono::milliseconds{1};
+        EXPECT_EQ(mount_error_with(stale, b_, o).kind(), MountErrorKind::no_head);
+        EXPECT_EQ(stale.head_reads(), 1);
+    }
 }
 
 // --- голова пуста или не блоб ---

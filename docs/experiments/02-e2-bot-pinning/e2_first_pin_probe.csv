@@ -1,0 +1,7 @@
+variant,t_s,action,result
+plain,0.2,getChatPinnedMessage,the new message
+plain,0.2,getMessages(new message).is_pinned,true
+plain,3.2,getChatPinnedMessage,the new message
+firstpin-full,0.0,getChatPinnedMessage,the new message
+firstpin-full,0.0,getMessages(new message).is_pinned,true
+firstpin-full,3.0,getChatPinnedMessage,the new message

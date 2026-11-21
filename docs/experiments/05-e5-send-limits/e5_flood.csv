@@ -1,0 +1,10 @@
+time_utc,series,phase,size_bytes,parallel,rate_per_min,step,attempt,offset_in_step_s,retry_after_s,wait_s,launched_last_60s,completed_last_60s,in_flight,what
+2026-11-20T10:31:43.139Z,ladder-1KiB-p1,step,1024,1,30,5,1,42.5,21,30,21,20,0,send 429: Too Many Requests: retry after 21 (retry after 21 s)
+2026-11-20T12:09:29.043Z,ladder-1KiB-p2,step,1024,2,20,4,1,438.1,9,15,20,20,0,send 429: Too Many Requests: retry after 9 (retry after 9 s)
+2026-11-20T13:04:35.510Z,ladder-1KiB-p4,step,1024,4,20,4,1,255.2,3,8,20,20,2,send 429: Too Many Requests: retry after 3 (retry after 3 s)
+2026-11-20T14:05:31.454Z,ladder-16MiB-p1,step,16777216,1,30,5,1,17.4,10,17,9,8,0,send 429: Too Many Requests: retry after 10 (retry after 10 s)
+2026-11-20T15:06:46.934Z,ladder-16MiB-p2,step,16777216,2,30,5,1,21.5,13,20,11,9,1,send 429: Too Many Requests: retry after 13 (retry after 13 s)
+2026-11-20T16:04:47.890Z,ladder-16MiB-p4,step,16777216,4,20,4,1,425.1,3,8,20,20,2,send 429: Too Many Requests: retry after 3 (retry after 3 s)
+2026-11-20T16:26:29.847Z,ladder-64MiB-p1,step,67108864,1,10,1,1,58.2,8,14,9,8,0,send 400: Too Many Requests: retry after 8 (retry after 8 s)
+2026-11-20T16:47:51.594Z,ladder-64MiB-p2,step,67108864,2,10,1,1,67.4,8,14,8,7,1,send 400: Too Many Requests: retry after 8 (retry after 8 s)
+2026-11-20T17:09:08.386Z,ladder-64MiB-p4,step,67108864,4,10,1,1,63.0,8,14,10,8,2,send 400: Too Many Requests: retry after 8 (retry after 8 s)

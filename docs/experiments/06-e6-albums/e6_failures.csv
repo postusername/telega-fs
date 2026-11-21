@@ -1,0 +1,19 @@
+variant,rep,size_bytes,group,bad_index,call_ok,call_error,docs_ok,docs_failed,failed_indexes,first_error,first_update_ms,last_update_ms,distinct_album_ids_among_ok,ok_server_ids_contiguous
+missing-before-call,1,1048576,10,4,no,400: Can't find real file path,0,10,0 1 2 3 4 5 6 7 8 9,400: Can't find real file path,1.4,1.4,0,
+empty-before-call,1,1048576,10,4,no,400: File must be non-empty,0,10,0 1 2 3 4 5 6 7 8 9,400: File must be non-empty,0.9,0.9,0,
+delete-after-call,1,16777216,10,9,yes,,9,1,9,"400: File ""<path>"" can't be opened for reading",8.6,8838.7,1,yes
+delete-after-call-first,1,16777216,10,0,yes,,9,1,0,"400: File ""<path>"" can't be opened for reading",133.6,10297.2,1,yes
+chmod000-after-call,1,16777216,10,9,yes,,9,1,9,"400: File ""<path>"" can't be opened for reading",8.2,15412.4,1,yes
+truncate-after-call,1,16777216,10,9,yes,,9,1,9,400: Can't upload empty file,13.2,7416.8,1,yes
+missing-before-call,2,1048576,10,4,no,400: Can't find real file path,0,10,0 1 2 3 4 5 6 7 8 9,400: Can't find real file path,1.0,1.0,0,
+empty-before-call,2,1048576,10,4,no,400: File must be non-empty,0,10,0 1 2 3 4 5 6 7 8 9,400: File must be non-empty,1.0,1.0,0,
+delete-after-call,2,16777216,10,9,yes,,9,1,9,"400: File ""<path>"" can't be opened for reading",5.9,9911.2,1,yes
+delete-after-call-first,2,16777216,10,0,yes,,9,1,0,"400: File ""<path>"" can't be opened for reading",424.0,7773.0,1,yes
+chmod000-after-call,2,16777216,10,9,yes,,9,1,9,"400: File ""<path>"" can't be opened for reading",6.5,9743.1,1,yes
+truncate-after-call,2,16777216,10,9,yes,,9,1,9,400: Can't upload empty file,12.8,8091.1,1,yes
+missing-before-call,3,1048576,10,4,no,400: Can't find real file path,0,10,0 1 2 3 4 5 6 7 8 9,400: Can't find real file path,0.9,0.9,0,
+empty-before-call,3,1048576,10,4,no,400: File must be non-empty,0,10,0 1 2 3 4 5 6 7 8 9,400: File must be non-empty,1.0,1.0,0,
+delete-after-call,3,16777216,10,9,yes,,9,1,9,"400: File ""<path>"" can't be opened for reading",6.1,8265.5,1,yes
+delete-after-call-first,3,16777216,10,0,yes,,9,1,0,"400: File ""<path>"" can't be opened for reading",128.6,9086.3,1,yes
+chmod000-after-call,3,16777216,10,9,yes,,9,1,9,"400: File ""<path>"" can't be opened for reading",9565.6,10056.9,1,yes
+truncate-after-call,3,16777216,10,9,yes,,9,1,9,400: Can't upload empty file,13.4,11285.5,1,yes

@@ -1,0 +1,5 @@
+round,mode,first_result,first_is_new_head,seen_new_after_s,error
+1,get,new head,1,0.4,
+2,"getSupergroupFullInfo, then get",new head,1,0.0,
+3,get,new head,1,0.6,
+4,"getSupergroupFullInfo, then get",new head,1,0.0,

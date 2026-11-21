@@ -1,0 +1,7 @@
+round,mode,immediate_result,seen_after_s,updates_seen,error
+1,poll,new,0.1,1,
+2,poll,new,0.0,2,
+3,poll,new,0.0,2,
+4,poll+getSupergroupFullInfo,new,0.0,2,
+5,poll+getSupergroupFullInfo,new,0.0,2,
+6,poll+getSupergroupFullInfo,new,0.0,2,

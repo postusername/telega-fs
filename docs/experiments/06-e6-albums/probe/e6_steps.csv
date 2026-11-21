@@ -1,0 +1,4 @@
+series,group,size_bytes,parallel,step,attempt,rate_docs_per_min,rate_jobs_per_min,start_utc,end_utc,window_s,planned_jobs,launched_jobs,launched_docs,docs_ok,docs_flood,docs_other_failed,jobs_ok,jobs_partial,jobs_failed,net_errors,timeouts,aborted,actual_docs_per_min,mib_ok,aggregate_mib_s,job_duration_median_s,job_duration_max_s,update_spread_median_ms,slot_wait_s,flood_retry_s,verdict
+single-1MiB-p2,1,1048576,2,0,1,5,5.00,2026-11-20T19:19:25.558Z,2026-11-20T19:21:25.559Z,120.0,10,10,10,10,0,0,10,0,0,0,0,0,5.00,10,0.08,0.30,0.40,0,0.0,0,clean
+album-1MiB-p2,10,1048576,2,0,1,10,1.00,2026-11-20T19:21:45.762Z,2026-11-20T19:23:45.762Z,120.0,2,2,20,20,0,0,2,0,0,0,0,0,10.00,20,0.17,1.64,1.95,4,0.0,0,clean
+album-16MiB-p2,10,16777216,2,0,1,10,1.00,2026-11-20T19:24:05.919Z,2026-11-20T19:26:05.920Z,120.0,2,2,20,20,0,0,2,0,0,0,0,0,10.00,320,2.67,10.30,10.55,4,0.0,0,clean

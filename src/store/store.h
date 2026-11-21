@@ -56,6 +56,11 @@ class Store {
     Store& operator=(const Store&) = delete;
     virtual ~Store() = default;
 
+    // true, если Store сам собирает из одновременных put_chunk альбомы (TelegramStore): тогда
+    // Vfs держит больше вызовов в полёте, чем реальных отправок (SPEC 8.1, «Параллельность
+    // загрузок»). Иначе одновременных put_chunk ровно upload_concurrency.
+    [[nodiscard]] virtual bool gathers_albums() const noexcept { return false; }
+
     // Загрузить зашифрованный файл чанка как новое сообщение. Файл после возврата можно удалять.
     virtual ChunkRef put_chunk(const std::filesystem::path& encrypted_file) = 0;
 
