@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
     add_e6_command(app, options, &exit_code);
     add_e7_command(app, options, &exit_code);
     add_e9_command(app, options, &exit_code);
+    add_e10_command(app, options, &exit_code);
     add_e2e_command(app, options, &exit_code);
 
     try {

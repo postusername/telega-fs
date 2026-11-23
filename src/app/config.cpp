@@ -9,6 +9,7 @@
 #include <array>
 #include <cerrno>
 #include <charconv>
+#include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <limits>
@@ -165,6 +166,15 @@ const std::unordered_map<std::string_view, ProfileSetter>& profile_setters() {
                            std::string_view k) { p.cache_limit = node_size(n, k); }},
         {"staging_limit", [](Profile& p, const toml::node& n,
                              std::string_view k) { p.staging_limit = node_size(n, k); }},
+        {"staging_high_watermark",
+         [](Profile& p, const toml::node& n, std::string_view k) {
+             // Пустая строка — значение по умолчанию (75 % от staging_limit).
+             if (const auto* str = n.as_string(); str != nullptr && trim(str->get()).empty()) {
+                 p.staging_high_watermark.reset();
+             } else {
+                 p.staging_high_watermark = node_size(n, k);
+             }
+         }},
         {"commit_interval", [](Profile& p, const toml::node& n,
                                std::string_view k) { p.commit_interval = node_duration(n, k); }},
         {"commit_every_chunks",
@@ -211,6 +221,12 @@ const std::unordered_map<std::string_view, ProfileSetter>& profile_setters() {
                             std::string_view k) { p.read_timeout = node_duration(n, k); }},
         {"plain_cache", [](Profile& p, const toml::node& n,
                            std::string_view k) { p.plain_cache = node_size(n, k); }},
+        {"readahead", [](Profile& p, const toml::node& n,
+                         std::string_view k) { p.readahead = node_size(n, k); }},
+        {"readahead_max", [](Profile& p, const toml::node& n,
+                             std::string_view k) { p.readahead_max = node_size(n, k); }},
+        {"compact_ratio", [](Profile& p, const toml::node& n,
+                             std::string_view k) { p.compact_ratio = node_double(n, k); }},
         {"chunk_size", [](Profile& p, const toml::node& n,
                           std::string_view k) { p.chunk_size = node_size(n, k); }},
         {"inline_max", [](Profile& p, const toml::node& n,
@@ -254,6 +270,23 @@ void validate(const Profile& p) {
     }
     if (p.checkpoint_ratio <= 0.0) {
         throw ConfigError(where + "checkpoint_ratio must be positive");
+    }
+    if (std::isnan(p.compact_ratio) || p.compact_ratio <= 0.0 || p.compact_ratio > 1.0) {
+        throw ConfigError(where + "compact_ratio must be in (0, 1]");
+    }
+    if (p.readahead > p.readahead_max) {
+        throw ConfigError(where + "readahead must not exceed readahead_max");
+    }
+    if (p.staging_limit == 0) {
+        throw ConfigError(where + "staging_limit must be positive");
+    }
+    if (p.staging_high_watermark &&
+        (*p.staging_high_watermark == 0 || *p.staging_high_watermark > p.staging_limit)) {
+        throw ConfigError(where +
+                          "staging_high_watermark must be positive and not exceed staging_limit");
+    }
+    if (p.staging_full_timeout <= std::chrono::milliseconds{0}) {
+        throw ConfigError(where + "staging_full_timeout must be positive");
     }
     if (p.upload_concurrency == 0 || p.download_concurrency == 0) {
         throw ConfigError(where + "concurrency must be at least 1");

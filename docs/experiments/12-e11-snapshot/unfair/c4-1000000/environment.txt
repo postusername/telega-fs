@@ -1,0 +1,7 @@
+--- snapshots seed=20261122 fair=0 writer_pause_us=0 writer_rows=10 take_rows=2000
+date: 2026-11-22 03:44:35 +0300
+cpu: AMD Ryzen 5 5500U with Radeon Graphics
+hardware_threads: 12
+kernel: Linux 7.0.0-42-generic x86_64
+mem_total_kib:       15733632 kB
+work_dir_fs: /dev/nvme0n1p4 btrfs  rw,relatime,ssd,discard=async,space_cache=v2,subvolid=5,subvol=/

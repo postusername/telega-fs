@@ -624,7 +624,8 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     if (!std::filesystem::exists(paths.state_db())) {
         StateStore::create(paths.state_db());
     }
-    auto state = std::make_unique<StateStore>(paths.state_db());
+    // --ro: схема не мигрируется, state.sqlite не меняется (SPEC 7.2).
+    auto state = std::make_unique<StateStore>(paths.state_db(), !ro);
     if (const auto local_uuid = state->get_blob(state_key::fs_uuid);
         local_uuid && !same_bytes(*local_uuid, fs_uuid)) {
         throw MountError(MountErrorKind::foreign_fs,

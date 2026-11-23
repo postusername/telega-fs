@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -104,11 +106,86 @@ TEST_F(StateStoreTest, Chain) {
     EXPECT_EQ(chain[0].msg_id, 20);
 }
 
+// Версия не сбрасывается при пересоздании строки (O_TRUNC, заливка): иначе новый объект файла
+// совпал бы по (ino, version) с прежним, который ещё лежит в закрытом пакете.
+TEST_F(StateStoreTest, DirtyChunkVersionIsMonotonicAcrossRecreation) {
+    const int64_t v1 = state_->upsert_dirty_chunk(5, 0, "a", 1);
+    const int64_t v2 = state_->upsert_dirty_chunk(5, 0, "a", 2);
+    EXPECT_TRUE(state_->delete_dirty_chunk_if_version(5, 0, v2));
+    const int64_t v3 = state_->upsert_dirty_chunk(5, 0, "a", 3);
+    EXPECT_GT(v2, v1);
+    EXPECT_GT(v3, v2);
+    state_->delete_dirty_chunks_for_ino(5);
+    const int64_t v4 = state_->upsert_dirty_chunk(5, 0, "a", 4);
+    EXPECT_GT(v4, v3);
+    // Счётчик другого inode общий: версии разных строк не повторяются.
+    const int64_t w = state_->upsert_dirty_chunk(6, 0, "b", 5);
+    EXPECT_GT(w, v4);
+}
+
+// После перезапуска счётчик продолжается выше версий оставшихся строк dirty_chunks и open_pack.
+TEST_F(StateStoreTest, DirtyChunkVersionContinuesAfterReopen) {
+    state_->upsert_dirty_chunk(5, 0, "a", 1);
+    const int64_t last = state_->upsert_dirty_chunk(5, 0, "a", 2);
+    state_->upsert_open_pack({9, last + 10, 100, 1});  // версия объекта, чей чанк уже ушёл
+    reopen();
+    EXPECT_GT(state_->upsert_dirty_chunk(7, 0, "c", 3), last + 10);
+}
+
+// Схема M2 (open_pack без added_ns, нет read_cache): rw-открытие мигрирует, --ro (migrate = false)
+// не меняет файл и не ломается на старой схеме (SPEC 7.2).
+class StateStoreMigration : public StateStoreTest {
+  protected:
+    void downgrade() {
+        state_.reset();
+        {
+            Db db = Db::open(path());
+            db.exec(
+                "DROP TABLE open_pack; "
+                "CREATE TABLE open_pack (ino INTEGER PRIMARY KEY, version INTEGER NOT NULL, "
+                "off INTEGER NOT NULL, len INTEGER NOT NULL); "
+                "INSERT INTO open_pack VALUES (3, 1, 0, 10); "
+                "DROP TABLE read_cache;");
+            db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+    }
+    [[nodiscard]] std::string file_bytes() const {
+        std::ifstream in(path(), std::ios::binary);
+        return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    }
+};
+
+TEST_F(StateStoreMigration, ReadOnlyOpenDoesNotChangeTheFile) {
+    downgrade();
+    const std::string before = file_bytes();
+    {
+        StateStore ro{path(), false};
+        EXPECT_TRUE(ro.list_open_pack().empty());  // пакеты в --ro не используются
+        EXPECT_FALSE(ro.get_int(state_key::base_generation));
+    }
+    EXPECT_EQ(file_bytes(), before);
+}
+
+TEST_F(StateStoreMigration, ReadWriteOpenMigratesOnceAndLaterOpensDoNotWrite) {
+    downgrade();
+    state_ = std::make_unique<StateStore>(path());
+    EXPECT_TRUE(state_->list_open_pack().empty());  // M2: строки open_pack пересозданы пустыми
+    state_->upsert_open_pack({4, 1, 10, 7});
+    reopen();
+    ASSERT_EQ(state_->list_open_pack().size(), 1U);
+    state_.reset();
+    const std::string before = file_bytes();
+    state_ = std::make_unique<StateStore>(path());
+    state_.reset();
+    EXPECT_EQ(file_bytes(), before);
+}
+
 TEST_F(StateStoreTest, DirtyChunks) {
+    // version берётся из общего монотонного счётчика: строго растёт при каждой записи.
     EXPECT_EQ(state_->upsert_dirty_chunk(5, 0, "staging/5-0", 100), 1);
     EXPECT_EQ(state_->upsert_dirty_chunk(5, 0, "staging/5-0b", 200), 2);
-    EXPECT_EQ(state_->upsert_dirty_chunk(5, 3, "staging/5-3", 150), 1);
-    EXPECT_EQ(state_->upsert_dirty_chunk(2, 1, "staging/2-1", 160), 1);
+    EXPECT_EQ(state_->upsert_dirty_chunk(5, 3, "staging/5-3", 150), 3);
+    EXPECT_EQ(state_->upsert_dirty_chunk(2, 1, "staging/2-1", 160), 4);
     reopen();
     const DirtyChunk c = test::must(state_->get_dirty_chunk(5, 0));
     EXPECT_EQ(c.path, "staging/5-0b");
@@ -161,13 +238,64 @@ TEST_F(StateStoreTest, UploadJournal) {
     EXPECT_EQ(state_->list_uploads().size(), 1U);
 }
 
-TEST_F(StateStoreTest, OpenPackTableExists) {
+TEST_F(StateStoreTest, OpenPackRows) {
+    EXPECT_TRUE(state_->list_open_pack().empty());
+    state_->upsert_open_pack({5, 3, 100, 1000});
+    state_->upsert_open_pack({2, 1, 50, 900});
+    state_->upsert_open_pack({5, 4, 120, 1100});  // замена строки
+    reopen();
+    const auto rows = state_->list_open_pack();
+    ASSERT_EQ(rows.size(), 2U);
+    EXPECT_EQ(rows[0].ino, 2);
+    EXPECT_EQ(rows[1].ino, 5);
+    EXPECT_EQ(rows[1].version, 4);
+    EXPECT_EQ(rows[1].len, 120);
+    EXPECT_EQ(rows[1].added_ns, 1100);
+    EXPECT_FALSE(state_->delete_open_pack_if_version(5, 3));  // версия изменилась
+    EXPECT_TRUE(state_->delete_open_pack_if_version(5, 4));
+    state_->delete_open_pack(2);
+    state_->delete_open_pack(99);  // нет строки — не ошибка
+    EXPECT_TRUE(state_->list_open_pack().empty());
+}
+
+TEST_F(StateStoreTest, ReadCacheTableExists) {
     state_.reset();
     Db db = Db::open(path());
-    db.exec("INSERT INTO open_pack (ino, version, off, len) VALUES (1, 1, 0, 10)");
-    Stmt st{db, "SELECT COUNT(*) FROM open_pack"};
+    db.exec(
+        "INSERT INTO read_cache (path, remote_file_id, blocks, last_access_ns) "
+        "VALUES ('/x', 'id', 4096, 7)");
+    Stmt st{db, "SELECT COUNT(*) FROM read_cache"};
     ASSERT_TRUE(st.step());
     EXPECT_EQ(st.column_int64(0), 1);
+}
+
+// SPEC 6.4: state.sqlite со схемой M2 (open_pack со столбцом off, без read_cache) при открытии
+// получает новую open_pack и read_cache; остальные таблицы не меняются.
+TEST_F(StateStoreTest, SchemaOfM2IsMigrated) {
+    state_->set_int(state_key::base_generation, 9);
+    state_->upsert_dirty_chunk(4, 0, "4-0", 77);
+    state_.reset();
+    {
+        Db db = Db::open(path());
+        db.exec("DROP TABLE open_pack; DROP TABLE read_cache;");
+        db.exec(
+            "CREATE TABLE open_pack (ino INTEGER PRIMARY KEY, version INTEGER NOT NULL, "
+            "off INTEGER NOT NULL, len INTEGER NOT NULL)");
+    }
+    reopen();
+    EXPECT_TRUE(state_->list_open_pack().empty());
+    state_->upsert_open_pack({1, 2, 3, 4});
+    EXPECT_EQ(state_->list_open_pack().size(), 1U);
+    EXPECT_EQ(state_->get_int(state_key::base_generation), 9);
+    EXPECT_EQ(state_->list_dirty_chunks().size(), 1U);
+    // Повторное открытие уже новой схемы ничего не стирает.
+    reopen();
+    EXPECT_EQ(state_->list_open_pack().size(), 1U);
+    state_.reset();
+    Db db = Db::open(path());
+    Stmt st{db, "SELECT COUNT(*) FROM read_cache"};
+    ASSERT_TRUE(st.step());
+    EXPECT_EQ(st.column_int64(0), 0);
 }
 
 // Шаг 8 из SPEC 7.1: всё одной транзакцией, сбой посередине не оставляет следов.

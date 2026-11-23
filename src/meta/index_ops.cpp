@@ -593,6 +593,43 @@ std::vector<Chunk> list_gc_candidates(Db& db, int64_t max_dead_gen, int64_t limi
     return out;
 }
 
+namespace {
+
+constexpr std::string_view kCompactionPredicate =
+    "kind = 2 AND refcount > 0 AND plain_size > 0 AND live_bytes * 1000000 < ?1 * plain_size";
+
+}  // namespace
+
+std::vector<Chunk> list_compaction_candidates(Db& db, int64_t ratio_ppm) {
+    static const std::string kSql =
+        sql("SELECT ", kChunkColumns,
+            std::string(" FROM chunks WHERE ") + std::string(kCompactionPredicate) +
+                " ORDER BY chunk_id");
+    Stmt st = db.cached(kSql);
+    st.bind(1, ratio_ppm);
+    std::vector<Chunk> out;
+    while (st.step()) {
+        out.push_back(chunk_from_row(st));
+    }
+    return out;
+}
+
+std::vector<Extent> list_compaction_extents(Db& db, int64_t ratio_ppm) {
+    static const std::string kSql =
+        std::string(
+            "SELECT ino, idx, chunk_id, chunk_off, len FROM extents WHERE chunk_id IN "
+            "(SELECT chunk_id FROM chunks WHERE ") +
+        std::string(kCompactionPredicate) + ") ORDER BY chunk_id, chunk_off";
+    Stmt st = db.cached(kSql);
+    st.bind(1, ratio_ppm);
+    std::vector<Extent> out;
+    while (st.step()) {
+        out.push_back(Extent{st.column_int64(0), st.column_int64(1), st.column_int64(2),
+                             st.column_int64(3), st.column_int64(4)});
+    }
+    return out;
+}
+
 void delete_chunk_row(Db& db, int64_t chunk_id) {
     {
         Stmt st = db.cached("SELECT refcount FROM chunks WHERE chunk_id = ?");

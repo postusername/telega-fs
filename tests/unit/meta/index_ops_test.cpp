@@ -487,6 +487,49 @@ TEST_F(IndexOps, GcCandidatesAndChunkRows) {
     });
 }
 
+// SPEC 6.5: уплотнению подлежат живые пакеты с live_bytes / plain_size строго ниже порога;
+// мёртвые пакеты (refcount = 0) убирает уборка, позиционные чанки не уплотняются.
+TEST_F(IndexOps, CompactionCandidatesAndExtents) {
+    const int64_t f1 = create(kRootIno, "f1");
+    const int64_t f2 = create(kRootIno, "f2");
+    const int64_t f3 = create(kRootIno, "f3");
+    const int64_t f4 = create(kRootIno, "f4");
+    int64_t thin = 0;
+    int64_t edge = 0;
+    int64_t fat = 0;
+    int64_t positional = 0;
+    w([&](Db& db) {
+        thin = new_chunk(db, 1000, kGen, ChunkKind::pack);
+        edge = new_chunk(db, 1000, kGen, ChunkKind::pack);
+        fat = new_chunk(db, 1000, kGen, ChunkKind::pack);
+        positional = new_chunk(db, 1000, kGen);
+        new_chunk(db, 1000, kGen, ChunkKind::pack);  // мёртвый пакет, экстентов нет
+        put_extent(db, {f1, 0, thin, 700, 100}, kGen);  // 0,10
+        put_extent(db, {f2, 0, edge, 0, 250}, kGen);    // ровно 0,25
+        put_extent(db, {f3, 0, fat, 10, 300}, kGen);    // 0,30
+        put_extent(db, {f4, 0, positional, 0, 10}, kGen);
+    });
+    r([&](Db& db) {
+        const auto ids = [&](int64_t ppm) {
+            std::vector<int64_t> out;
+            for (const Chunk& c : list_compaction_candidates(db, ppm)) {
+                out.push_back(c.chunk_id);
+            }
+            return out;
+        };
+        EXPECT_EQ(ids(250'000), (std::vector<int64_t>{thin}));  // 0,25 — не ниже порога
+        EXPECT_EQ(ids(250'001), (std::vector<int64_t>{thin, edge}));
+        EXPECT_EQ(ids(1'000'000), (std::vector<int64_t>{thin, edge, fat}));
+        EXPECT_TRUE(ids(100'000).empty());
+        const auto exts = list_compaction_extents(db, 250'001);
+        ASSERT_EQ(exts.size(), 2U);
+        EXPECT_EQ(exts[0].ino, f1);
+        EXPECT_EQ(exts[0].chunk_off, 700);
+        EXPECT_EQ(exts[1].ino, f2);
+        EXPECT_TRUE(list_compaction_extents(db, 100'000).empty());
+    });
+}
+
 TEST_F(IndexOps, FindChunkByMacOnlyPositional) {
     w([&](Db& db) {
         const int64_t a = new_chunk(db, 100, kGen);

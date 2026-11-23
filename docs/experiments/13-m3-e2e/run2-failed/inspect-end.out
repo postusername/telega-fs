@@ -1,0 +1,10 @@
+logging in bot
+messages messageDocument: 1357
+messages messagePinMessage: 18
+messages messageSupergroupChatCreate: 1
+documents .bin: 1349
+documents .idx: 8
+documents bytes: 11301995914
+documents with a name outside <16 hex>.bin|.idx: 0
+documents with a caption: 0
+INSPECT OK

@@ -141,6 +141,11 @@ jobs:
           key: ${{ env.CCACHE_KEY }}-${{ github.sha }}
           restore-keys: ${{ env.CCACHE_KEY }}-
 
+      # Счётчики лежат в каталоге кэша и восстанавливаются вместе с ним: обнуляем, чтобы
+      # --show-stats после сборки показал статистику этого прогона (SPEC 15.6).
+      - name: Reset ccache statistics
+        run: ccache --zero-stats
+
       - name: Allow sanitizer memory layout
         if: matrix.preset == 'asan' || matrix.preset == 'tsan'
         # Новые ядра с mmap_rnd_bits=32 ломают раскладку памяти TSan и ASan.
@@ -168,7 +173,7 @@ jobs:
 
   # Отдельная задача без checkout: право удалять кэши не получает код из репозитория.
   ccache-cleanup:
-    needs: build
+    needs: [build, clang-tidy]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -178,12 +183,15 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - name: Keep only the newest ccache entry per preset and compiler
+      - name: Keep only the newest ccache and clang-tidy cache entries
         # Старые записи иначе вытесняют кэш TDLib из лимита репозитория (SPEC 15.6).
         run: |
-          gh cache list --key ccache- --limit 200 --json id,key,createdAt --jq '
-            group_by(.key | sub("-[0-9a-f]{40}$"; ""))
-            | .[] | sort_by(.createdAt) | .[:-1][] | .id' > stale.txt
+          : > stale.txt
+          for prefix in ccache- clang-tidy-; do
+            gh cache list --key "$prefix" --limit 200 --json id,key,createdAt --jq '
+              group_by(.key | sub("-[0-9a-f]{40}$"; ""))
+              | .[] | sort_by(.createdAt) | .[:-1][] | .id' >> stale.txt
+          done
           cat stale.txt
           while read -r id; do
             gh cache delete "$id" || true
@@ -208,6 +216,7 @@ jobs:
     env:
       CC: clang-18
       CXX: clang++-18
+      CLANG_TIDY_CACHE_DIR: ${{ github.workspace }}/.cache/clang-tidy
     steps:
       - uses: actions/checkout@v7
         with:
@@ -232,6 +241,16 @@ jobs:
         with:
           path: ${{ env.DEPS_DIR }}
           key: deps-${{ hashFiles('cmake/deps.cmake') }}
+
+      # Кэш чистых результатов clang-tidy (tools/ci/tidy-cache-key.py): пишет только main,
+      # PR только читает (SPEC 15.6). Ключ файла внутри кэша сам учитывает TU, флаги,
+      # .clang-tidy и версию clang-tidy, поэтому запись кэша общая.
+      - name: Restore clang-tidy cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CLANG_TIDY_CACHE_DIR }}
+          key: clang-tidy-cache-${{ github.sha }}
+          restore-keys: clang-tidy-cache-
 
       - name: Configure
         run: cmake --preset ci
@@ -268,8 +287,16 @@ jobs:
 
       - name: Run clang-tidy
         run: |
+          mkdir -p "$CLANG_TIDY_CACHE_DIR"
           if [[ -s files.bin ]]; then
             xargs -0 tools/ci/run-clang-tidy.sh build/ci < files.bin
           else
             echo "no C++ sources changed"
           fi
+
+      - name: Save clang-tidy cache
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CLANG_TIDY_CACHE_DIR }}
+          key: clang-tidy-cache-${{ github.sha }}

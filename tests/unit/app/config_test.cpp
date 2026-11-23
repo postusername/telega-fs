@@ -120,6 +120,77 @@ TEST(ConfigParse, DefaultsMatchSpec) {
     EXPECT_EQ(p.pack_threshold, uint64_t{4} << 20U);
     EXPECT_EQ(p.pack_target, uint64_t{8} << 20U);
     EXPECT_EQ(p.pack_max_age, 30s);
+    EXPECT_DOUBLE_EQ(p.compact_ratio, 0.25);
+    EXPECT_EQ(p.readahead, uint64_t{4} << 20U);
+    EXPECT_EQ(p.readahead_max, uint64_t{32} << 20U);
+    EXPECT_EQ(p.plain_cache, uint64_t{64} << 20U);
+    EXPECT_EQ(p.read_timeout, 60s);
+}
+
+TEST(ConfigParse, Readahead) {
+    const auto config = parse_config(R"(
+[profiles.a]
+readahead = "1MiB"
+readahead_max = "8MiB"
+[profiles.off]
+readahead = "0"
+)");
+    EXPECT_EQ(config.profile("a").readahead, uint64_t{1} << 20U);
+    EXPECT_EQ(config.profile("a").readahead_max, uint64_t{8} << 20U);
+    EXPECT_EQ(config.profile("off").readahead, 0U);  // readahead выключен
+    EXPECT_THROW((void)parse_config("[profiles.main]\nreadahead = \"64MiB\"\n"), ConfigError);
+    EXPECT_THROW((void)parse_config("[profiles.main]\nreadahead = \"x\"\n"), ConfigError);
+}
+
+TEST(ConfigParse, StagingLimits) {
+    const auto config = parse_config(R"(
+[profiles.def]
+[profiles.empty]
+staging_limit = "1GiB"
+staging_high_watermark = ""
+[profiles.set]
+staging_limit = "1GiB"
+staging_high_watermark = "512MiB"
+staging_full_timeout = "3s"
+[profiles.equal]
+staging_limit = "1GiB"
+staging_high_watermark = "1GiB"
+)");
+    EXPECT_FALSE(config.profile("def").staging_high_watermark);  // пусто — 75 % в Vfs
+    EXPECT_EQ(config.profile("def").staging_full_timeout, 300s);
+    EXPECT_FALSE(config.profile("empty").staging_high_watermark);
+    EXPECT_EQ(config.profile("set").staging_high_watermark, uint64_t{512} << 20U);
+    EXPECT_EQ(config.profile("set").staging_full_timeout, 3s);
+    EXPECT_EQ(config.profile("equal").staging_high_watermark, uint64_t{1} << 30U);
+    for (const char* bad : {
+             "staging_limit = \"1GiB\"\nstaging_high_watermark = \"2GiB\"\n",
+             "staging_high_watermark = \"9GiB\"\n",  // больше staging_limit по умолчанию (8GiB)
+             "staging_high_watermark = \"0\"\n",
+             "staging_limit = \"0\"\n",
+             "staging_full_timeout = \"0s\"\n",
+             "staging_high_watermark = \"x\"\n",
+         }) {
+        EXPECT_THROW((void)parse_config(std::string("[profiles.main]\n") + bad), ConfigError)
+            << bad;
+    }
+}
+
+TEST(ConfigParse, CompactRatio) {
+    const auto config = parse_config(R"(
+[profiles.a]
+compact_ratio = 0.5
+[profiles.b]
+compact_ratio = 1
+)");
+    EXPECT_DOUBLE_EQ(config.profile("a").compact_ratio, 0.5);
+    EXPECT_DOUBLE_EQ(config.profile("b").compact_ratio, 1.0);
+    for (const char* bad : {"0", "0.0", "-0.1", "1.5"}) {
+        EXPECT_THROW(
+            (void)parse_config(std::string("[profiles.main]\ncompact_ratio = ") + bad + "\n"),
+            ConfigError)
+            << bad;
+    }
+    EXPECT_THROW((void)parse_config("[profiles.main]\ncompact_ratio = \"x\"\n"), ConfigError);
 }
 
 TEST(ConfigParse, NewTelegramKeys) {

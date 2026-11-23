@@ -45,8 +45,7 @@ class VfsTelegram : public ::testing::Test {
         runtime.stop();
     }
 
-    // Файл из нескольких килобайт: больше инлайна (4096), поэтому свой чанк, и далеко до порога
-    // альбомов.
+    // Файл больше pack_threshold (64 КиБ в тестах): позиционный чанк, далеко до порога альбомов.
     int64_t put_file(const std::string& name, const Bytes& data) const {
         const Created c = env.vfs->create(kRoot, bytes_of(name), 0644, O_RDWR, 1000, 1000);
         EXPECT_EQ(env.vfs->write(c.attr.ino, 0, data), data.size());
@@ -73,7 +72,7 @@ TEST_F(VfsTelegram, TwentySmallDirtyChunksReachTheStoreAsAlbumsOfTen) {
     std::vector<int64_t> inos;
     std::vector<Bytes> data;
     for (uint64_t i = 0; i < 20; ++i) {
-        data.push_back(pattern(6000 + i * 10, 100 + i));
+        data.push_back(pattern(70'000 + i * 10, 100 + i));
         inos.push_back(put_file("f" + std::to_string(i), data.back()));
     }
     env.vfs->flush_all();

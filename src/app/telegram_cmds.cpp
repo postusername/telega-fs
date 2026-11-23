@@ -192,11 +192,32 @@ void TelegramBackend::connect() {
     }
 }
 
-void TelegramBackend::open_store(int64_t chat_id) {
+store::TelegramStoreOptions mount_store_options(const Loaded& loaded, int64_t chat_id,
+                                                bool read_only) {
+    store::TelegramStoreOptions options = store_options(loaded.profile, chat_id);
+    // Кэш чтения (SPEC 8.2): файлы TDLib в tdfiles/, учёт в state.sqlite профиля. В --ro
+    // state.sqlite не меняется (SPEC 7.2): без state_db учёт ведётся только в памяти, таблица
+    // read_cache не создаётся и не пишется.
+    if (!read_only) {
+        options.state_db = loaded.paths.state_db();
+    }
+    options.tdfiles_dir = loaded.paths.tdfiles();
+    options.cache_limit = loaded.profile.cache_limit;
+    return options;
+}
+
+void TelegramBackend::open_store(int64_t chat_id, bool read_only) {
     limiter_ = std::make_unique<store::RateLimiter>(limiter_options(loaded_.profile));
-    store_ = std::make_unique<store::TelegramStore>(session_.client(), *limiter_,
-                                                    store_options(loaded_.profile, chat_id));
+    store::TelegramStoreOptions options = mount_store_options(loaded_, chat_id, read_only);
+    store_ =
+        std::make_unique<store::TelegramStore>(session_.client(), *limiter_, std::move(options));
     store_->open();
+}
+
+void TelegramBackend::start_read_cache() {
+    if (store_) {
+        store_->start_read_cache();
+    }
 }
 
 store::Store& TelegramBackend::store() {

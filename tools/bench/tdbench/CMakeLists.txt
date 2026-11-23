@@ -22,5 +22,6 @@ add_executable(tgfs-bench
     cmd_e6.cpp
     cmd_e7.cpp
     cmd_e9.cpp
+    cmd_e10.cpp
     cmd_e2e.cpp)
 target_link_libraries(tgfs-bench PRIVATE tgfs_bench_td CLI11::CLI11)

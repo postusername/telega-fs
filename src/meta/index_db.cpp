@@ -234,6 +234,8 @@ MetaStore::MetaStore(std::filesystem::path path, DirtyHook dirty_hook)
         throw IndexCorrupt("unsupported index format_version " +
                            std::to_string(params.format_version));
     }
+    // SPEC 6.6: WAL не остаётся размером с пик, пока снимок держит читательскую транзакцию.
+    writer_->exec("PRAGMA journal_size_limit = " + std::to_string(kJournalSizeLimit));
     session_ = std::make_unique<Session>(*writer_);
 }
 
@@ -348,6 +350,32 @@ Bytes MetaStore::take_patchset(TakeStats* stats) {
         stats->patch_bytes = patch.size();
     }
     return patch;
+}
+
+void MetaStore::cut_snapshot(SnapshotReader& reader, TakeStats* stats) {
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::now();
+    const std::lock_guard lock(mutex_);
+    const auto locked = Clock::now();
+    if (in_write_) {
+        throw std::logic_error("cut_snapshot inside MetaStore::write");
+    }
+    // Сначала срез, потом сессия: пока мьютекс у нас, писатель не коммитит, и обе точки
+    // совпадают. Если пересоздание сессии не удалось, срез закрывается, и ничего не менялось.
+    reader.begin();
+    try {
+        reset_session();
+    } catch (...) {
+        reader.end();
+        throw;
+    }
+    dirty_.store(false);
+    rows_.store(0);
+    if (stats != nullptr) {
+        stats->wait = std::chrono::duration_cast<std::chrono::nanoseconds>(locked - start);
+        stats->locked = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - locked);
+        stats->patch_bytes = 0;
+    }
 }
 
 void MetaStore::vacuum_into(const std::filesystem::path& path) {

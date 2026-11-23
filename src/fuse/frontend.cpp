@@ -23,6 +23,11 @@ namespace telega::fuse {
 
 namespace {
 
+#if FUSE_USE_VERSION >= 312
+// Предел рабочих потоков цикла FUSE (libfuse 3.12+; по умолчанию там 10).
+constexpr unsigned kMaxWorkerThreads = 64;
+#endif
+
 using vfs::Attr;
 using vfs::Vfs;
 
@@ -157,6 +162,12 @@ void op_init(void* userdata, fuse_conn_info* conn) {
     auto& impl = *static_cast<Frontend::Impl*>(userdata);
     // Метки времени ФС — наносекунды.
     conn->time_gran = 1;
+    // Чтение (SPEC 9): max_read не ограничиваем. max_readahead не трогаем: ядро берёт минимум из
+    // него и read_ahead_kb устройства (128 КиБ), так что сервер readahead ядра не поднимет;
+    // чтение вперёд делает ChunkReader (SPEC 8.2).
+    if ((conn->capable & FUSE_CAP_ASYNC_READ) != 0) {
+        conn->want |= FUSE_CAP_ASYNC_READ;
+    }
     spdlog::info("fuse: mounted at {} (proto {}.{}, max_write {})",
                  impl.options.mountpoint.string(), conn->proto_major, conn->proto_minor,
                  conn->max_write);
@@ -308,6 +319,9 @@ void op_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info* fi) {
         auto& impl = self(req);
         fi->fh = impl.vfs.open(ino_of(ino), fi->flags);
         fi->direct_io = 0;  // mmap требует обычного режима с кэшем страниц
+        // Писатель один, и все изменения идут через ядро этого монтирования: страничный кэш
+        // остаётся верным между открытиями (SPEC 9).
+        fi->keep_cache = 1;
         if (fuse_reply_open(req, fi) != 0) {
             impl.vfs.release(fi->fh);
         }
@@ -331,9 +345,10 @@ void op_create(fuse_req_t req, fuse_ino_t parent, const char* name, mode_t mode,
     });
 }
 
-void op_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, fuse_file_info* /*fi*/) {
+void op_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, fuse_file_info* fi) {
     guarded(req, [&] {
-        const Bytes data = self(req).vfs.read(ino_of(ino), static_cast<uint64_t>(off), size);
+        const Bytes data =
+            self(req).vfs.read(ino_of(ino), static_cast<uint64_t>(off), size, fi->fh);
         fuse_reply_buf(req, reinterpret_cast<const char*>(data.data()), data.size());
     });
 }
@@ -584,10 +599,23 @@ void Frontend::serve() {
     if (!impl_->mounted) {
         throw std::logic_error("Frontend::serve before mount");
     }
+#if FUSE_USE_VERSION >= 312
+    // Без явного предела libfuse 3.12+ держит не больше 10 рабочих потоков: десять write,
+    // ждущих места в staging (SPEC 8.3), заняли бы их все, и остальные запросы стояли бы до
+    // ENOSPC. Потоки создаются по требованию, поэтому большой предел ничего не стоит в покое.
+    fuse_loop_config* config = fuse_loop_cfg_create();
+    fuse_loop_cfg_set_clone_fd(config, 1);
+    fuse_loop_cfg_set_idle_threads(config, 10);
+    fuse_loop_cfg_set_max_threads(config, kMaxWorkerThreads);
+    const int rc = fuse_session_loop_mt(impl_->session, config);
+    fuse_loop_cfg_destroy(config);
+#else
+    // libfuse 3.10-3.11: предела числа потоков нет.
     fuse_loop_config config{};
     config.clone_fd = 1;
     config.max_idle_threads = 10;
     const int rc = fuse_session_loop_mt(impl_->session, &config);
+#endif
     if (rc < 0) {
         throw FuseError(std::string("FUSE loop failed: ") + std::generic_category().message(-rc));
     }

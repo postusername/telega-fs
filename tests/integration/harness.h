@@ -110,7 +110,9 @@ struct ProfileSpec {
 // при том же config.toml, local_dir и keyfile.
 class Env {
   public:
-    explicit Env(ProfileSpec spec = {});
+    // base — каталог для временного корня (создаётся); пусто — TELEGA_TEST_TMPDIR, затем системный
+    // временный каталог. Тяжёлые тесты передают каталог на большом диске.
+    explicit Env(ProfileSpec spec = {}, const fs::path& base = {});
     Env(const Env&) = delete;
     Env& operator=(const Env&) = delete;
     ~Env();
@@ -148,7 +150,14 @@ class Env {
                                     const EnvMap& extra_env = {},
                                     const std::string& dir_name = "mnt");
 
+    // Сторож-процесс (см. harness.cpp): живёт вне дерева теста и, когда тест умер (в том числе от
+    // SIGKILL по таймауту ctest), убивает процессы с корнем окружения в командной строке, отцепляет
+    // точки монтирования и удаляет корень. Сообщение: "M <точка монтирования>".
+    void watch_mount(const fs::path& dir) const;
+
   private:
+    void start_watchdog();
+
     fs::path root_;
     fs::path config_file_;
     fs::path keyfile_;
@@ -157,6 +166,7 @@ class Env {
     fs::path cache_home_;
     int machine_ = 0;
     int fg_runs_ = 0;
+    int watch_fd_ = -1;  // конец pipe сторожа: закрытие (в том числе смертью процесса) — сигнал
     ProfileSpec spec_;
 };
 

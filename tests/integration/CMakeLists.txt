@@ -22,19 +22,25 @@ endforeach()
 add_executable(telega_integration_tests
     harness.cpp
     fuse_test.cpp
-    fsx_fuse_test.cpp)
-target_link_libraries(telega_integration_tests PRIVATE tgfs_fsx telega_options GTest::gtest_main)
+    fsx_fuse_test.cpp
+    resources_test.cpp)
+# telega_store — чтение файла stats LocalDirStore (read_store_stats), telega_crypto — sha256 из
+# libsodium. Оба без TDLib.
+target_link_libraries(telega_integration_tests PRIVATE
+    tgfs_fsx telega_store telega_crypto telega_options GTest::gtest_main)
+# Тяжёлые данные приёмки M3 — в каталоге сборки (на большом диске), а не в /tmp.
 target_compile_definitions(telega_integration_tests PRIVATE
-    TELEGA_FS_BINARY="$<TARGET_FILE:telega-fs>")
+    TELEGA_FS_BINARY="$<TARGET_FILE:telega-fs>"
+    TELEGA_IT_HEAVY_DIR="${CMAKE_BINARY_DIR}/it-tmp")
 add_dependencies(telega_integration_tests telega-fs)
 
-# Длинные прогоны fsx — в наборе FuseFsxLong: метка long и большой таймаут (в пресетах по
-# умолчанию 300 с). Остальное идёт в обычном ctest.
+# Длинные прогоны (fsx и приёмка M3 на 10 ГиБ) — метка long и большой таймаут. Остальное идёт в
+# обычном ctest.
 gtest_discover_tests(telega_integration_tests
-    TEST_FILTER "-FuseFsxLong.*"
+    TEST_FILTER "-FuseFsxLong.*:ResourcesLong.*"
     DISCOVERY_MODE PRE_TEST
-    PROPERTIES TIMEOUT 600)
+    PROPERTIES TIMEOUT 900)
 gtest_discover_tests(telega_integration_tests
-    TEST_FILTER "FuseFsxLong.*"
+    TEST_FILTER "FuseFsxLong.*:ResourcesLong.*"
     DISCOVERY_MODE PRE_TEST
-    PROPERTIES LABELS long TIMEOUT 3600)
+    PROPERTIES LABELS long TIMEOUT 7200)

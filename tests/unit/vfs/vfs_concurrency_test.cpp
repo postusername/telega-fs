@@ -9,6 +9,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <future>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -270,7 +271,7 @@ int max_put_chunk_calls(VfsEnv& env, bool albums, uint32_t upload_concurrency, i
     env.start(o);
     for (int i = 0; i < files; ++i) {
         const int64_t ino = env.mkfile("f" + std::to_string(i));
-        env.vfs->write(ino, 0, pattern(6000, static_cast<uint64_t>(i) + 1));
+        env.vfs->write(ino, 0, pattern(70'000, static_cast<uint64_t>(i) + 1));
     }
     env.vfs->flush_all();
     env.vfs->shutdown();
@@ -307,6 +308,64 @@ TEST(VfsUploadParallelism, AlbumStoreGetsTenPerSlotUpToThirtyTwo) {
         VfsEnv env;  // переполнение 10 · upload_concurrency в 32 битах не даёт мало потоков
         EXPECT_EQ(max_put_chunk_calls(env, true, 0x7fffffffU, 60, 32), 32);
     }
+}
+
+// Сетевая часть чтения идёт без полосы inode: std::shared_mutex (glibc) предпочитает читателей, и
+// перекрывающиеся медленные чтения иначе не пускали бы писателя на ту же полосу (SPEC 9).
+// Читатели стоят внутри Store::read_range (ворота), писатель в это время должен пройти.
+TEST(VfsReadStripe, WriterOnTheSameStripeDoesNotWaitForSlowOverlappingReads) {
+    VfsEnv env(4096, 16 << 20, 1 << 16, 256 << 10);
+    GateStore gate(*env.store);
+    env.override_store = &gate;
+    env.start(fast_options());
+    Vfs& v = *env.vfs;
+    const Bytes data = pattern(600'000, 5);
+    const Created c = v.create(kRoot, bytes_of("slow"), 0644, O_RDWR, 1, 1);
+    v.write(c.attr.ino, 0, data);
+    v.release(c.fh);
+    v.fsync(c.attr.ino);
+    env.restart();  // overlay и RAM-кэш пусты: чтение идёт в Store
+    std::vector<std::thread> readers;
+    struct Cleanup {
+        GateStore& gate;
+        std::vector<std::thread>& readers;
+        VfsEnv& env;
+        ~Cleanup() {
+            gate.open_read_gate();
+            for (auto& t : readers) {
+                if (t.joinable()) {
+                    t.join();
+                }
+            }
+            env.vfs.reset();
+            env.override_store = nullptr;
+        }
+    };
+    const Cleanup cleanup{gate, readers, env};
+    gate.close_read_gate();
+    const int64_t ino = c.attr.ino;
+    for (const uint64_t off : {0ULL, 200'000ULL, 400'000ULL}) {
+        readers.emplace_back([&env, ino, off] { (void)env.vfs->read(ino, off, 1000, 0); });
+    }
+    ASSERT_TRUE(gate.wait_reads_entered(1));
+
+    // Исключительная полоса того же inode: setattr не ходит в сеть.
+    std::promise<void> done;
+    auto finished = done.get_future();
+    std::thread writer([&] {
+        SetAttr change;
+        change.mode = 0600;
+        env.vfs->setattr(ino, change);
+        done.set_value();
+    });
+    const bool passed = finished.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+    EXPECT_TRUE(passed) << "the writer waits for reads that are in the network";
+    gate.open_read_gate();
+    writer.join();
+    for (auto& t : readers) {
+        t.join();
+    }
+    EXPECT_EQ(env.vfs->read(ino, 0, 1000, 0), Bytes(data.begin(), data.begin() + 1000));
 }
 
 }  // namespace

@@ -25,7 +25,20 @@
 //   а реальных одновременных отправок не больше upload_concurrency ограничивает сам Store.
 //   Отдельный поток-таймер запечатывает чанки по seal_delay. Store при загрузке вызывается без
 //   блокировок, затем результат применяется под полосой inode, если чанк ещё нужен (см.
-//   upload_chunk в vfs_upload.cpp).
+//   upload_chunk в vfs_upload.cpp);
+// - мелкие файлы (SPEC 6.5) запечатываются в открытый пакет PackWriter (pack_writer.h): класс
+//   хранения выбирается при каждом запечатывании в seal_file (инлайн → пакет → позиционный).
+//   Закрытый пакет заливается задачей того же пула, параллельно с позиционными чанками.
+//   Единственное исключение из правила «не больше одной полосы»: применение пакета берёт
+//   полосы всех его объектов сразу, по возрастанию адреса (одна транзакция индекса, SPEC 6.5).
+//   Это безопасно, пока поток, держащий полосу, не ждёт другую полосу, и пока он не ждёт
+//   ничего, что освобождает применение пакета (место в staging, SPEC 8.3, ждут вне полосы);
+// - место staging/ + tmp/ (SPEC 8.3) считает StagingBudget: длины staging-файлов ведёт Overlay,
+//   файлы tmp/ в полёте — аренды (Lease) загрузок и PackWriter. write считает нужный рост под
+//   полосой и берёт место try_acquire_user; не хватило — отпускает полосу, ждёт в
+//   wait_for_space (запечатывает старое, закрывает пакет, спит на условии) и повторяет, а по
+//   staging_full_timeout отвечает ENOSPC. Загрузки берут аренду целиком до полосы. read,
+//   getattr, fsync и метаданные места не ждут.
 
 #include <sys/stat.h>
 
@@ -37,12 +50,14 @@
 #include <deque>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -57,6 +72,8 @@
 #include "store/store.h"
 #include "vfs/chunk_reader.h"
 #include "vfs/overlay.h"
+#include "vfs/pack_writer.h"
+#include "vfs/staging_budget.h"
 
 namespace telega::vfs {
 
@@ -68,6 +85,9 @@ struct VfsOptions {
     uint32_t download_concurrency = 4;
     uint64_t plain_cache = uint64_t{64} << 20U;
     std::chrono::milliseconds read_timeout{60'000};
+    // Окно readahead (SPEC 8.2, 12.2): начальное и предел удвоения; readahead = 0 — выключен.
+    uint64_t readahead = uint64_t{4} << 20U;
+    uint64_t readahead_max = uint64_t{32} << 20U;
     // Задержка повтора транзиентной ошибки Store: от retry_initial с удвоением до retry_max
     // (SPEC 10.2: 1–60 с). Тесты ставят миллисекунды.
     std::chrono::milliseconds retry_initial{1'000};
@@ -75,6 +95,23 @@ struct VfsOptions {
     // Сколько fsync, sync, flush_all и shutdown ждут заливки, затем EIO (SPEC 10.2, 12.2).
     // Фоновые повторы при этом продолжаются, overlay не меняется.
     std::chrono::milliseconds sync_timeout{300'000};
+    // Возраст открытого пакета (от самого старого объекта), после которого он закрывается
+    // (SPEC 6.5, 12.2).
+    std::chrono::milliseconds pack_max_age{30'000};
+    // Только для тестов: сбой на шаге заливки пакета (см. PackHooks::probe).
+    std::function<void(std::string_view)> pack_probe;
+    // Учёт staging и обратное давление (SPEC 8.3, 12.2). Предел staging/ + tmp/; порог, выше
+    // которого запечатывание идёт без seal_delay (0 — 75 % от staging_limit); сколько write
+    // ждёт места до ENOSPC.
+    uint64_t staging_limit = uint64_t{8} << 30U;
+    uint64_t staging_high_watermark = 0;
+    std::chrono::milliseconds staging_full_timeout{300'000};
+    // Сегмент, которым RMW расшифровывает существующий чанк в staging-файл (SPEC 8.1): память
+    // RMW не зависит от размера чанка. Тесты уменьшают.
+    uint64_t rmw_segment = uint64_t{1} << 20U;
+    // Только для тестов: вызывается под мьютексом учёта при каждом изменении занятого места
+    // (проверка инварианта «занятое ≤ staging_limit», SPEC 8.3). Должен быть быстрым.
+    std::function<void(uint64_t used)> staging_probe;
     uint64_t virtual_capacity = uint64_t{1} << 50U;  // 1 ПиБ (SPEC 9, statfs)
     bool read_only = false;  // --ro; кроме того, EROFS, если committer.read_only()
 };
@@ -149,8 +186,12 @@ struct VfsStatus {
     size_t dirty_chunks = 0;
     size_t dirty_inodes = 0;
     size_t queued = 0;
-    size_t uploading = 0;
+    size_t uploading = 0;  // позиционные чанки и закрытые пакеты в заливке
     size_t failed = 0;
+    size_t open_pack_objects = 0;  // объекты открытого пакета (SPEC 6.5)
+    int64_t open_pack_bytes = 0;
+    uint64_t staging_used = 0;  // занято в staging/ + tmp/ (SPEC 8.3)
+    uint64_t staging_limit = 0;
     uint64_t uploaded_chunks = 0;
     bool fatal = false;
     std::string last_error;
@@ -211,8 +252,10 @@ class Vfs {
     // Последний release файла запечатывает его асинхронно (SPEC 8.1).
     void release(uint64_t fh);
     void flush(uint64_t fh);
-    // Прочитать до size байт с позиции off; короче — только на конце файла.
-    Bytes read(int64_t ino, uint64_t off, size_t size);
+    // Прочитать до size байт с позиции off; короче — только на конце файла. fh — дескриптор
+    // открытого файла: по нему ChunkReader определяет последовательное чтение и ведёт readahead
+    // (SPEC 8.2); 0 — дескриптор неизвестен, readahead не ведётся.
+    Bytes read(int64_t ino, uint64_t off, size_t size, uint64_t fh = 0);
     size_t write(int64_t ino, uint64_t off, ByteSpan data);
     // Залить все грязные чанки файла, дождаться и сделать коммит (SPEC 7.3, 8.1).
     void fsync(int64_t ino);
@@ -241,6 +284,16 @@ class Vfs {
 
     VfsStatus status();
 
+    // Закрыть открытый пакет и поставить его заливку, не дожидаясь размера и возраста (SPEC 6.5:
+    // давление на staging, SPEC 8.3). Не блокирует. false — открытый пакет пуст.
+    bool close_open_pack();
+    // Состояние PackWriter (для status и тестов).
+    [[nodiscard]] PackStatus pack_status() const;
+    // Учёт места staging (для status и тестов).
+    [[nodiscard]] const StagingBudget& staging() const { return *budget_; }
+    // Наибольший буфер, выделенный RMW под кусок чанка (для тестов: память не растёт с чанком).
+    [[nodiscard]] uint64_t rmw_peak_buffer() const { return rmw_peak_.load(); }
+
   private:
     struct Handle {
         int64_t ino = 0;
@@ -259,10 +312,12 @@ class Vfs {
     };
     // Задача пула загрузчиков.
     struct Job {
-        enum class Kind : uint8_t { seal, upload } kind = Kind::seal;
+        enum class Kind : uint8_t { seal, upload, pack } kind = Kind::seal;
         int64_t ino = 0;
         int64_t idx = 0;
         bool only_expired = false;  // seal по таймеру: только чанки старше seal_delay
+        bool explicit_close = false;  // seal явно и закрыть пакет файла (изменился при заливке)
+        uint64_t seq = 0;  // pack: номер закрытого пакета
     };
     enum class SealMode : uint8_t { timer, release, explicit_request };
 
@@ -298,15 +353,37 @@ class Vfs {
     void truncate_locked(int64_t ino, const meta::Inode& inode, int64_t new_size);
     // Обрезать экстенты и инлайн-данные индекса по размеру (SPEC 6.2).
     void clamp_index(meta::Db& db, int64_t ino, int64_t size);
-    // Создать staging-файл позиции idx (RMW / копия инлайна / пустой).
-    void materialize(int64_t ino, int64_t idx, const meta::Inode& inode,
-                     const std::optional<std::pair<uint64_t, uint64_t>>& write_range,
-                     std::optional<Bytes>& inline_data);
+    // Чем наполнить новый staging-файл позиции (SPEC 8.1): ничем, копией инлайна или старым
+    // чанком (RMW).
+    struct Seed {
+        uint64_t len = 0;  // сколько байт копируется (0 — пустой файл)
+        bool from_inline = false;
+        std::optional<meta::Chunk> chunk;
+        uint64_t chunk_off = 0;
+    };
+    // Что копировать в позицию idx; может упасть с EIO (нет чанка). inline_data кэширует инлайн.
+    Seed seed_for(int64_t ino, int64_t idx, const meta::Inode& inode,
+                  const std::optional<std::pair<uint64_t, uint64_t>>& write_range,
+                  std::optional<Bytes>& inline_data);
+    // Создать staging-файл позиции по seed. RMW расшифровывает чанк кусками rmw_segment прямо
+    // в файл. При ошибке файл удаляется.
+    void materialize(int64_t ino, int64_t idx, const Seed& seed,
+                     const std::optional<Bytes>& inline_data);
+    // write под исключительной полосой. false — места не хватило (shortage — сколько нужно):
+    // вызывающий ждёт вне полосы и повторяет.
+    bool write_locked(int64_t ino, uint64_t off, ByteSpan data, uint64_t& shortage);
+    // Ждать места вне полос; ENOSPC по staging_full_timeout (SPEC 8.3).
+    void wait_for_space(uint64_t shortage, std::chrono::steady_clock::time_point deadline);
+    // Запечатать самые старые файлы и закрыть открытый пакет, если занятое (с extra) выше
+    // порога (SPEC 8.1, 8.3). Не блокирует, ошибки только в журнал.
+    void relieve_pressure(uint64_t extra);
     void read_staging(const ChunkKey& key, uint64_t off, MutableByteSpan out);
     std::optional<meta::Chunk> chunk_row(int64_t chunk_id);
 
     // --- запечатывание и загрузка (vfs_upload.cpp) ---
     void recover();
+    // Пересчитать «внешние» файлы tmp/ (снимки индекса) для учёта staging (SPEC 8.3).
+    void scan_external_tmp();
     // Закоммитить индекс (fsync, fsyncdir, sync). В --ro ничего не делает; если коммитер стал
     // read-only (CAS-конфликт) или коммит не удался — FsError(EIO), SPEC 7.3.
     void commit_or_throw();
@@ -333,6 +410,9 @@ class Vfs {
     // очередь. Возвращает цели ожидания (для explicit_request).
     std::vector<UploadTarget> seal_file(int64_t ino, SealMode mode);
     bool try_seal_inline(int64_t ino, const meta::Inode& inode, int64_t size);
+    // Файл мал для пакета: положить его объект в открытый пакет (SPEC 6.5). Под исключительной
+    // полосой inode.
+    void seal_to_pack(int64_t ino, int64_t size, bool explicit_request);
     void enqueue_upload(const ChunkKey& key, bool explicit_request);
     void upload_chunk(const ChunkKey& key);
     // Дождаться целей, но не дольше sync_timeout; ошибка заливки или таймаут — FsError(EIO).
@@ -353,12 +433,16 @@ class Vfs {
     meta::IndexParams params_;
     int64_t chunk_size_ = 0;
 
+    std::unique_ptr<StagingBudget> budget_;  // раньше overlay_: Overlay держит указатель
     std::unique_ptr<Overlay> overlay_;
     std::unique_ptr<ChunkReader> reader_;
+    std::unique_ptr<PackWriter> packs_;
     std::array<std::shared_mutex, kStripes> stripes_;
 
     std::atomic<bool> fatal_{false};
     std::atomic<uint64_t> uploaded_{0};
+    std::atomic<uint64_t> rmw_peak_{0};
+    std::mutex relieve_mu_;  // лист: один обходчик давления за раз
 
     std::mutex refs_mu_;  // лист: refs_, handles_, dir_handles_, next_fh_
     std::unordered_map<int64_t, Refs> refs_;

@@ -120,6 +120,12 @@ std::filesystem::path snapshot_tmp_path(const std::filesystem::path& tmp_dir, ui
     return tmp_dir / ("index-" + std::to_string(generation) + ".sqlite");
 }
 
+std::filesystem::path snapshot_raw_path(const std::filesystem::path& tmp_dir, uint64_t generation) {
+    auto path = snapshot_tmp_path(tmp_dir, generation);
+    path += ".raw";
+    return path;
+}
+
 void install_dirty_hook(MetaStore& meta, StateStore& state, std::function<void()> extra) {
     meta.set_dirty_hook([&state, extra = std::move(extra)] {
         state.set_int(state_key::index_dirty, 1);
@@ -239,6 +245,8 @@ void CommitManager::poke() { cv_.notify_all(); }
 void CommitManager::set_cas_override(int64_t head_msg_id, uint64_t head_generation) {
     const std::lock_guard lock(commit_mu_);
     cas_override_ = CasExpect{head_msg_id, head_generation};
+    const std::lock_guard force(force_mu_);
+    force_epoch_.fetch_add(1);
     force_next_snapshot_ = true;
 }
 
@@ -360,19 +368,24 @@ std::optional<TakeStats> CommitManager::take_intermediate() {
     TakeStats stats;
     try {
         const std::lock_guard queue(patch_queue_mu_);
-        const Bytes patch = meta_.with_lock([&] { return meta_.take_patchset(&stats); });
-        if (patch.empty()) {
-            return std::nullopt;
+        try {
+            const Bytes patch = meta_.with_lock([&] { return meta_.take_patchset(&stats); });
+            if (patch.empty()) {
+                return std::nullopt;
+            }
+            append_patch(patch);
+            // В pending теперь лежит ещё не закоммиченный патч (в том числе из одних служебных
+            // записей): без index_dirty = 1 коммит бы не запустился, а монтирование приняло бы
+            // pending за локальные изменения при чистом индексе.
+            state_.set_int(state_key::index_dirty, 1);
+        } catch (...) {
+            // Патч забран из сессии, но не сохранён (или не сохранён флаг): дельта его потеряла
+            // бы. Флаг ставится, пока держится очередь: коммит, решивший сделать дельту до
+            // очереди, перепроверяет его под ней (commit_attempt) и уйдёт на снимок.
+            mark_force_snapshot();
+            throw;
         }
-        append_patch(patch);
-        // В pending теперь лежит ещё не закоммиченный патч (в том числе из одних служебных
-        // записей): без index_dirty = 1 коммит бы не запустился, а монтирование приняло бы
-        // pending за локальные изменения при чистом индексе.
-        state_.set_int(state_key::index_dirty, 1);
     } catch (const std::exception& e) {
-        // Патч забран из сессии, но не сохранён (или не сохранён флаг): дельта его потеряла
-        // бы. Следующий коммит — снимок.
-        mark_force_snapshot();
         const std::string what = std::string("intermediate patch take: ") + e.what();
         record_failure(what);
         throw CommitError(what);
@@ -393,7 +406,13 @@ CommitResult CommitManager::commit(bool force_snapshot) {
     if (!force_snapshot && last_success_attempt_.load() > entry) {
         return {};
     }
-    return commit_locked(force_snapshot);
+    bool restart_as_snapshot = false;
+    CommitResult result = commit_attempt(force_snapshot, restart_as_snapshot);
+    if (restart_as_snapshot) {
+        // Под очередью патчей выяснилось, что нужен снимок; ничего не забрано, попытка заново.
+        result = commit_attempt(true, restart_as_snapshot);
+    }
+    return result;
 }
 
 bool CommitManager::sleep_for(std::chrono::milliseconds d) {
@@ -511,6 +530,8 @@ void CommitManager::append_patch(const Bytes& patch) {
 }
 
 void CommitManager::mark_force_snapshot() {
+    const std::lock_guard force(force_mu_);
+    force_epoch_.fetch_add(1);
     force_next_snapshot_.store(true);
     try {
         state_.set_int(state_key::force_snapshot, 1);
@@ -520,7 +541,7 @@ void CommitManager::mark_force_snapshot() {
     }
 }
 
-CommitResult CommitManager::commit_locked(bool force_snapshot) {
+CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as_snapshot) {
     const auto started = SteadyClock::now();
     if (read_only_.load()) {
         if (force_snapshot || index_changed()) {
@@ -608,6 +629,7 @@ CommitResult CommitManager::commit_locked(bool force_snapshot) {
     m.generation = up.generation;
 
     const auto snap_path = snapshot_tmp_path(config_.tmp_dir, up.generation);
+    const auto snap_raw_path = snapshot_raw_path(config_.tmp_dir, up.generation);
     const auto blob_path = config_.tmp_dir / ("blob-" + std::to_string(up.generation) + ".idx");
     bool snapshot_taken = false;  // изменения ушли из сессии: неудача → force_snapshot
     Bytes raw;
@@ -616,33 +638,49 @@ CommitResult CommitManager::commit_locked(bool force_snapshot) {
         // Шаг 2: под блокировкой MetaStore только забор патча или VACUUM INTO.
         if (kind == crypto::BlobKind::delta) {
             std::vector<PendingPatchset> pending;
+            bool to_snapshot = false;
+            if (config_.before_patch_queue) {
+                config_.before_patch_queue();
+            }
             {
                 // Очередь патчей захвачена до блокировки MetaStore и отпускается после записи
                 // патча: другой забор (промежуточный) не обгонит наш при записи в pending.
                 const std::lock_guard queue(patch_queue_mu_);
-                // pending меняют только заборы (под очередью) и шаг 8 (под commit_mu_, он у нас),
-                // поэтому «патчи уже есть» можно узнать до захвата MetaStore.
-                const bool had_pending = state_.max_pending_seq() != 0;
-                Bytes patch;
-                meta_.with_lock([&] {
-                    patch = meta_.take_patchset(&m.take);
-                    if (!patch.empty() || had_pending) {
-                        // Записи после забора попадут в следующий блоб: чанк, умерший в них,
-                        // ещё жив в поколении G+1 (dead_since_gen, SPEC 7.4).
-                        base_generation_.store(up.generation);
-                    } else {
-                        state_.set_int(state_key::index_dirty, 0);  // все записи откатились
+                // Вид блоба решался до очереди. Промежуточный забор, не сохранивший патч, ставит
+                // force_snapshot, пока держит очередь (take_intermediate), поэтому здесь флаг
+                // виден: дельта без потерянного патча расходилась бы с локальным индексом.
+                to_snapshot = force_next_snapshot_.load();
+                if (!to_snapshot) {
+                    // pending меняют только заборы (под очередью) и шаг 8 (под commit_mu_, он у
+                    // нас), поэтому «патчи уже есть» можно узнать до захвата MetaStore.
+                    const bool had_pending = state_.max_pending_seq() != 0;
+                    Bytes patch;
+                    meta_.with_lock([&] {
+                        patch = meta_.take_patchset(&m.take);
+                        if (!patch.empty() || had_pending) {
+                            // Записи после забора попадут в следующий блоб: чанк, умерший в них,
+                            // ещё жив в поколении G+1 (dead_since_gen, SPEC 7.4).
+                            base_generation_.store(up.generation);
+                        } else {
+                            state_.set_int(state_key::index_dirty, 0);  // все записи откатились
+                        }
+                    });
+                    if (!patch.empty()) {
+                        try {
+                            append_patch(patch);
+                        } catch (...) {
+                            mark_force_snapshot();  // патч забран из сессии, но не сохранён
+                            throw;
+                        }
                     }
-                });
-                if (!patch.empty()) {
-                    try {
-                        append_patch(patch);
-                    } catch (...) {
-                        mark_force_snapshot();  // патч забран из сессии, но не сохранён
-                        throw;
-                    }
+                    pending = state_.list_pending();
                 }
-                pending = state_.list_pending();
+            }
+            if (to_snapshot) {
+                // Ничего не забрано: commit() повторит попытку снимком.
+                spdlog::debug("commit: force_snapshot was set after the blob kind was chosen");
+                restart_as_snapshot = true;
+                return result;
             }
             if (pending.empty()) {
                 // Все записи откатились: в индексе ничего не изменилось.
@@ -667,18 +705,32 @@ CommitResult CommitManager::commit_locked(bool force_snapshot) {
         } else {
             remove_quietly(snap_path);
             {
-                // Очередь патчей держится на время VACUUM INTO: забранный до него патч должен
-                // успеть лечь в pending (его строки уже в снимке), забранный после — уже не
-                // входит в снимок и переживёт шаг 8.
-                const std::lock_guard queue(patch_queue_mu_);
-                meta_.with_lock([&] {
+                // Читательское соединение снимка и соединение копии открываются заранее, вне
+                // блокировок (SPEC 6.6). Деструктор закрывает читательскую транзакцию и убирает
+                // .raw на любом пути выхода.
+                SnapshotCopy copy{meta_.path(), snap_raw_path, snap_path, config_.snapshot_hook};
+                {
+                    // Очередь патчей держится на время фиксации среза и чтения max_pending_seq:
+                    // забранный до среза патч должен успеть лечь в pending (его строки уже в
+                    // срезе), забранный после — не входит в снимок и переживёт шаг 8.
+                    const std::lock_guard queue(patch_queue_mu_);
                     const auto t = SteadyClock::now();
-                    meta_.vacuum_into(snap_path);
-                    m.vacuum = since(t);
-                    snapshot_taken = true;
-                    base_generation_.store(up.generation);
-                });
-                up.max_pending_seq = state_.max_pending_seq();
+                    meta_.with_lock([&] {
+                        meta_.cut_snapshot(copy.reader(), &m.take);
+                        // С этого момента сессия пересоздана без патча: сбой снимка означает
+                        // force_snapshot.
+                        snapshot_taken = true;
+                        base_generation_.store(up.generation);
+                        // Метки, поставленные до этой точки (они и под очередью патчей), срез
+                        // уже покрывает; поставленные позже снимок не сбросит.
+                        up.force_epoch = force_epoch_.load();
+                    });
+                    up.max_pending_seq = state_.max_pending_seq();
+                    m.snapshot_hold = since(t);
+                }
+                const SnapshotCopyStats copied = copy.copy();
+                m.snapshot_backup = copied.backup;
+                m.vacuum = copied.vacuum;
             }
             raw = read_file(snap_path);
         }
@@ -826,6 +878,12 @@ CommitResult CommitManager::commit_locked(bool force_snapshot) {
 }
 
 void CommitManager::finish_commit(const Uploaded& up) {
+    // Флаг force_snapshot снимок сбрасывает, только если с его среза флаг не ставили заново
+    // (иначе потерянный после среза патч остался бы без снимка). force_mu_ держится до конца:
+    // постановка флага не вклинится между проверкой эпохи и записью.
+    const std::lock_guard force(force_mu_);
+    const bool clear_force =
+        up.kind == crypto::BlobKind::snapshot && force_epoch_.load() == up.force_epoch;
     // Одна транзакция state.sqlite под мьютексом MetaStore: index_dirty = dirty_since_take()
     // не теряет записей, сделанных во время коммита (их хук уже поставил index_dirty = 1).
     meta_.with_lock([&] {
@@ -845,7 +903,9 @@ void CommitManager::finish_commit(const Uploaded& up) {
                 state_.append_chain(up.msg_id, up.blob_size);
             } else {
                 state_.reset_chain_to_snapshot(up.msg_id, up.blob_size);
-                state_.set_int(state_key::force_snapshot, 0);
+                if (clear_force) {
+                    state_.set_int(state_key::force_snapshot, 0);
+                }
             }
             // Оставшиеся патчи ещё не закоммичены. Записи после забора уже поставили флаг сами.
             const bool uncommitted = meta_.dirty_since_take() || state_.max_pending_seq() != 0;
@@ -853,7 +913,7 @@ void CommitManager::finish_commit(const Uploaded& up) {
         });
         base_generation_.store(std::max(base_generation_.load(), up.generation));
     });
-    if (up.kind == crypto::BlobKind::snapshot) {
+    if (clear_force) {
         force_next_snapshot_.store(false);
     }
     {

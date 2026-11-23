@@ -36,6 +36,9 @@ struct Profile {
 
     uint64_t cache_limit = uint64_t{4} << 30U;
     uint64_t staging_limit = uint64_t{8} << 30U;
+    // Порог, выше которого запечатывание идёт сразу, без seal_delay (SPEC 8.3, 12.2); пусто —
+    // 75 % от staging_limit.
+    std::optional<uint64_t> staging_high_watermark;
     std::chrono::milliseconds commit_interval{60'000};
     uint64_t commit_every_chunks = 64;
     uint32_t max_chain = 16;
@@ -53,6 +56,9 @@ struct Profile {
     std::chrono::milliseconds read_timeout{60'000};
     std::chrono::milliseconds sync_timeout{300'000};
     uint64_t plain_cache = uint64_t{64} << 20U;
+    uint64_t readahead = uint64_t{4} << 20U;  // окно readahead, 0 — выключен (SPEC 8.2)
+    uint64_t readahead_max = uint64_t{32} << 20U;  // окно удваивается до этого значения
+    double compact_ratio = 0.25;  // уплотнять пакеты с live_bytes / plain_size ниже (SPEC 6.5)
 
     // Задаются при init и дальше берутся из index.sqlite (meta), а не из конфига.
     uint64_t chunk_size = uint64_t{8} << 20U;  // E7

@@ -44,6 +44,7 @@ telega_module_tests(telega_store_tests telega_store
 # Блок ведёт исполнитель TelegramStore.
 telega_module_tests(telega_tgstore_tests telega_tgstore
     unit/store/rate_limiter_test.cpp
+    unit/store/read_cache_test.cpp
     unit/store/telegram_store_test.cpp)
 
 telega_module_tests(telega_meta_tests telega_meta
@@ -51,6 +52,8 @@ telega_module_tests(telega_meta_tests telega_meta
     unit/meta/index_ops_test.cpp
     unit/meta/meta_store_test.cpp
     unit/meta/delta_journal_test.cpp
+    unit/meta/fair_mutex_test.cpp
+    unit/meta/snapshot_test.cpp
     unit/meta/state_db_test.cpp)
 
 # Блок ведёт исполнитель commit.
@@ -59,7 +62,8 @@ telega_module_tests(telega_commit_tests telega_commit
     unit/commit/mount_test.cpp
     unit/commit/keyring_flow_test.cpp
     unit/commit/commit_timing_test.cpp
-    unit/commit/fault_test.cpp)
+    unit/commit/fault_test.cpp
+    unit/commit/snapshot_commit_test.cpp)
 
 # Блок ведёт исполнитель vfs.
 telega_module_tests(telega_vfs_tests telega_vfs
@@ -67,7 +71,16 @@ telega_module_tests(telega_vfs_tests telega_vfs
     unit/vfs/vfs_data_test.cpp
     unit/vfs/vfs_fault_test.cpp
     unit/vfs/vfs_model_test.cpp
-    unit/vfs/vfs_concurrency_test.cpp)
+    unit/vfs/vfs_concurrency_test.cpp
+    unit/vfs/vfs_pack_test.cpp
+    unit/vfs/chunk_reader_deadline_test.cpp
+    unit/vfs/vfs_readahead_test.cpp
+    unit/vfs/vfs_staging_test.cpp)
+
+# Падение на каждом шаге заливки и применения пакета: настоящее монтирование и Vfs поверх него.
+telega_module_tests(telega_pack_fault_tests telega_vfs
+    unit/vfs/pack_fault_test.cpp)
+target_link_libraries(telega_pack_fault_tests PRIVATE telega_commit)
 
 # Vfs поверх TelegramStore на фейковом транспорте TDLib.
 telega_module_tests(telega_vfs_tg_tests telega_vfs

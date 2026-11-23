@@ -7,6 +7,7 @@
 // НЕ ДОПУСКАЕТСЯ (SPEC 9).
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -19,6 +20,8 @@
 #include "common/bytes.h"
 
 namespace telega::store {
+
+using Deadline = std::chrono::steady_clock::time_point;
 
 struct ChunkRef {
     int64_t msg_id = 0;
@@ -64,8 +67,32 @@ class Store {
     // Загрузить зашифрованный файл чанка как новое сообщение. Файл после возврата можно удалять.
     virtual ChunkRef put_chunk(const std::filesystem::path& encrypted_file) = 0;
 
-    // Прочитать [offset, offset + out.size()) сообщения. Выход за конец — permanent.
+    // Прочитать [offset, offset + out.size()) сообщения. Выход за конец — permanent. Это
+    // пользовательское чтение: TelegramStore исполняет его с приоритетом 32..17 по возрасту
+    // запроса (SPEC 10.2) и вытесняет им readahead.
     virtual void read_range(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out) = 0;
+
+    // read_range с общим сроком вызывающего: тот, кто читает чанк в несколько обращений и с
+    // повторами (ChunkReader), держит один дедлайн read_timeout от постановки чтения (SPEC 8.2) и
+    // передаёт остаток. Реализация не ждёт дольше until (transient по его истечении) и не начинает
+    // повтор, если остатка не хватает. Реализация по умолчанию срок не знает и зовёт read_range.
+    virtual void read_range_until(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out,
+                                  Deadline until) {
+        (void)until;
+        read_range(ref, offset, out);
+    }
+
+    // Подсказка readahead (SPEC 8.2): диапазон [offset, offset + len) сообщения скоро прочитают.
+    // Не блокирует и ничего не возвращает: ошибки и недоступность сети подсказка глотает.
+    // distance — расстояние в чанках файла от позиции чтения (0 — ближайший чанк), из него
+    // TelegramStore получает приоритет скачивания 16 − distance, но не ниже 1 (SPEC 10.2).
+    // Реализация по умолчанию ничего не делает.
+    virtual void prefetch(const ChunkRef& ref, uint64_t offset, uint64_t len, uint32_t distance) {
+        (void)ref;
+        (void)offset;
+        (void)len;
+        (void)distance;
+    }
 
     // Удалить сообщения. Отсутствующие id не ошибка.
     virtual void delete_messages(std::span<const int64_t> msg_ids) = 0;

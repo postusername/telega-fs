@@ -1,0 +1,4 @@
+series,rep,variant,trigger_ms,prefix_before_kib,old_outcome,old_outcome_rel_ms,new_first_byte_ms,new_done_ms,preserved_prefix_kib,preserved_ok,new_data_ok,extra_after_done_kib,max_gap_ms,final_ok,error
+p5-sync-r1,1,sync,356.5,192.0,200: Canceled by another downloadFile request,12.1,297.3,420.1,192.0,1,1,0.0,225.2,1,
+p5-async-r1,1,async,328.3,1024.0,n/a (async),,359.8,359.8,1024.0,1,1,0.0,243.6,1,
+p5-extend-r1,1,extend,313.8,960.0,200: Canceled by another downloadFile request,0.2,0.5,0.5,8194.0,1,1,0.0,85.9,1,

@@ -413,6 +413,71 @@ TEST_F(LocalDirStoreTest, DelayThenPerform) {
     EXPECT_GE(std::chrono::steady_clock::now() - start, milliseconds{100});
 }
 
+// Ограничение полосы заливки (bandwidth=<байт/с>): данные целы, время не меньше расчётного.
+TEST_F(LocalDirStoreTest, BandwidthLimitsPutChunkAndKeepsData) {
+    LocalDirStore store(dir_);
+    constexpr uint64_t kRate = uint64_t{8} << 20U;
+    store.set_faults({FaultRule{.op = StoreOp::put_chunk,
+                                .nth = std::nullopt,
+                                .action = FaultAction::bandwidth,
+                                .bytes_per_sec = kRate}});
+    const Bytes data = make_bytes(size_t{4} << 20U, 3);  // 4 МиБ при 8 МиБ/с: не меньше 0,5 с
+    const auto src = source(data);
+    const auto start = std::chrono::steady_clock::now();
+    const auto ref = store.put_chunk(src);
+    const auto took = std::chrono::steady_clock::now() - start;
+    EXPECT_GE(took, milliseconds{450});
+    // Верхняя граница не даёт ограничителю сильно недодавать: ожидание 0,5 с, запас на нагрузку.
+    EXPECT_LT(took, std::chrono::milliseconds{1500});
+    EXPECT_EQ(read_all(store, ref.msg_id, data.size()), data);
+}
+
+TEST_F(LocalDirStoreTest, BandwidthIsSharedByConcurrentPutsAndOtherOpsAreFree) {
+    LocalDirStore store(dir_);
+    constexpr uint64_t kRate = uint64_t{8} << 20U;
+    store.set_faults({FaultRule{.op = StoreOp::put_chunk,
+                                .nth = std::nullopt,
+                                .action = FaultAction::bandwidth,
+                                .bytes_per_sec = kRate}});
+    const auto a = source(make_bytes(size_t{2} << 20U, 1));
+    const auto b = source(make_bytes(size_t{2} << 20U, 2));
+    const auto start = std::chrono::steady_clock::now();
+    std::thread t1([&] { (void)store.put_chunk(a); });
+    std::thread t2([&] { (void)store.put_chunk(b); });
+    t1.join();
+    t2.join();
+    // Две заливки по 2 МиБ делят 8 МиБ/с: вместе не быстрее 0,5 с (а не 0,25 с каждая).
+    EXPECT_GE(std::chrono::steady_clock::now() - start, milliseconds{450});
+}
+
+// put_index и чтение правилом для put_chunk не ограничены. Полоса мала (128 КиБ/с): если бы
+// ограничение касалось и их, блоб на 2 МиБ ждал бы 16 с, а запас до границы не зависит от нагрузки.
+TEST_F(LocalDirStoreTest, BandwidthOfPutChunkDoesNotLimitOtherOperations) {
+    LocalDirStore store(dir_);
+    store.set_faults({FaultRule{.op = StoreOp::put_chunk,
+                                .nth = std::nullopt,
+                                .action = FaultAction::bandwidth,
+                                .bytes_per_sec = uint64_t{128} << 10U}});
+    const auto idx = source(make_bytes(size_t{2} << 20U, 4));
+    const auto t0 = std::chrono::steady_clock::now();
+    const int64_t id = store.put_index(idx);
+    (void)store.read_index(id);
+    EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::seconds{8});
+}
+
+TEST_F(LocalDirStoreTest, BandwidthRuleReplacedBySetFaults) {
+    LocalDirStore store(dir_);
+    store.set_faults({FaultRule{.op = StoreOp::put_chunk,
+                                .nth = std::nullopt,
+                                .action = FaultAction::bandwidth,
+                                .bytes_per_sec = uint64_t{1} << 20U}});
+    store.set_faults({});
+    const auto src = source(make_bytes(size_t{2} << 20U, 5));
+    const auto start = std::chrono::steady_clock::now();
+    (void)store.put_chunk(src);
+    EXPECT_LT(std::chrono::steady_clock::now() - start, milliseconds{900});
+}
+
 TEST_F(LocalDirStoreTest, DelayDoesNotHoldLock) {
     LocalDirStore store(dir_);
     store.set_faults({FaultRule{.op = StoreOp::read_head,
@@ -494,6 +559,29 @@ TEST(ParseFaultRules, Valid) {
     EXPECT_EQ(rules[5].op, StoreOp::put_index);
     EXPECT_EQ(rules[5].nth, 10U);
     EXPECT_EQ(rules[6].op, StoreOp::set_head);
+}
+
+TEST(ParseFaultRules, Bandwidth) {
+    const auto rules = parse_fault_rules("put_chunk:*:bandwidth=52428800; put_index:*:bandwidth=1");
+    ASSERT_EQ(rules.size(), 2U);
+    EXPECT_EQ(rules[0].op, StoreOp::put_chunk);
+    EXPECT_EQ(rules[0].nth, std::nullopt);
+    EXPECT_EQ(rules[0].action, FaultAction::bandwidth);
+    EXPECT_EQ(rules[0].bytes_per_sec, uint64_t{52428800});
+    EXPECT_EQ(rules[1].op, StoreOp::put_index);
+    EXPECT_EQ(rules[1].bytes_per_sec, 1U);
+    for (const char* bad : {
+             "put_chunk:*:bandwidth",
+             "put_chunk:*:bandwidth=",
+             "put_chunk:*:bandwidth=0",
+             "put_chunk:*:bandwidth=-1",
+             "put_chunk:*:bandwidth=50MiB",
+             "put_chunk:2:bandwidth=100",  // свойство хранилища, номер вызова не имеет смысла
+             "read_range:*:bandwidth=100",  // только заливка
+             "set_head:*:bandwidth=100",
+         }) {
+        EXPECT_THROW((void)parse_fault_rules(bad), std::invalid_argument) << bad;
+    }
 }
 
 TEST(ParseFaultRules, Invalid) {
@@ -600,6 +688,64 @@ TEST_F(LocalDirStoreTest, ConcurrentPutAndRead) {
     EXPECT_EQ(store.call_count(StoreOp::put_chunk), kTotal);
     const HeadInfo head = require_head(store);
     EXPECT_EQ(head.msg_id, store.pinned().back());
+}
+
+// ---- Статистика чтения (SPEC 8.2, 14) ----------------------------------------------------
+
+TEST_F(LocalDirStoreTest, CountsReadRangeBytesAndPrefetchCallsInAFileForOtherProcesses) {
+    LocalDirStore store(dir_);
+    EXPECT_EQ(read_store_stats(dir_), StoreStats{});  // файл есть с создания, счётчики нулевые
+    const Bytes data = make_bytes(5000, 7);
+    const ChunkRef ref = store.put_chunk(source(data));
+
+    Bytes out(1000);
+    store.read_range(ref, 100, out);
+    store.read_range(ref, 0, std::span<std::byte>{out}.first(300));
+    // Выход за конец и сбой не считаются прочитанными.
+    Bytes big(6000);
+    EXPECT_EQ(error_kind_of([&] { store.read_range(ref, 0, big); }), StoreErrorKind::permanent);
+    store.set_faults({FaultRule{
+        .op = StoreOp::read_range, .nth = std::nullopt, .action = FaultAction::transient}});
+    EXPECT_EQ(error_kind_of([&] { store.read_range(ref, 0, out); }), StoreErrorKind::transient);
+    store.set_faults({});
+
+    // Подсказка ничего не читает: только считается.
+    store.prefetch(ref, 0, 4096, 0);
+    store.prefetch(ref, 4096, 904, 1);
+
+    const StoreStats expected{.read_range_calls = 2,
+                              .read_range_bytes = 1300,
+                              .prefetch_calls = 2,
+                              .prefetch_bytes = 5000};
+    EXPECT_EQ(store.stats(), expected);
+    // Снимок в файле — то, что видит другой процесс.
+    EXPECT_EQ(read_store_stats(dir_), expected);
+    const Bytes raw = read_file(dir_ / kStatsFileName);
+    EXPECT_EQ(std::string(reinterpret_cast<const char*>(raw.data()), raw.size()),
+              "read_range_calls 2\nread_range_bytes 1300\nprefetch_calls 2\nprefetch_bytes 5000\n");
+}
+
+TEST_F(LocalDirStoreTest, StatsStartFromZeroInANewObject) {
+    {
+        LocalDirStore store(dir_);
+        const ChunkRef ref = store.put_chunk(source(make_bytes(100, 1)));
+        Bytes out(100);
+        store.read_range(ref, 0, out);
+        store.prefetch(ref, 0, 10, 0);
+        EXPECT_EQ(store.stats().read_range_bytes, 100U);
+    }
+    const LocalDirStore again(dir_);
+    EXPECT_EQ(again.stats(), StoreStats{});
+    EXPECT_EQ(read_store_stats(dir_), StoreStats{});
+}
+
+TEST(LocalDirStoreStatsFormat, ParseSkipsGarbage) {
+    const StoreStats s = parse_store_stats(
+        "read_range_calls 3\nbogus line\nread_range_bytes x\nprefetch_calls 4\nprefetch_bytes 9");
+    EXPECT_EQ(s.read_range_calls, 3U);
+    EXPECT_EQ(s.read_range_bytes, 0U);
+    EXPECT_EQ(s.prefetch_calls, 4U);
+    EXPECT_EQ(s.prefetch_bytes, 9U);
 }
 
 }  // namespace

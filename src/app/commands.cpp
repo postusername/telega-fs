@@ -253,7 +253,7 @@ int serve(MountContext& ctx, Ready& ready) {
             const crypto::Key tdlib_key = unlock_tdlib_key_or_throw(keyring, ctx.key);
             telegram = std::make_unique<TelegramBackend>(ctx.loaded, tdlib_key);
             telegram->connect();
-            telegram->open_store(*p.chat_id);
+            telegram->open_store(*p.chat_id, ctx.args.read_only);
             store = &telegram->store();
             spdlog::info("Telegram session ready, channel {}", *p.chat_id);
         } else {
@@ -283,6 +283,9 @@ int serve(MountContext& ctx, Ready& ready) {
         mo.commit.checkpoint_ratio = p.checkpoint_ratio;
         mo.commit.retain_generations = p.retain_generations;
         mounted = meta::mount_fs(*store, meta::FsPaths{ctx.loaded.paths.data_dir}, mo);
+        if (telegram) {
+            telegram->start_read_cache();
+        }
         wipe_passphrase();  // ключи разблокированы, пароль больше не нужен
         const meta::MountReport& rep = mounted->report();
         spdlog::info("file system opened: remote generation {}, local generation {}{}",
@@ -295,7 +298,13 @@ int serve(MountContext& ctx, Ready& ready) {
         vo.download_concurrency = p.download_concurrency;
         vo.plain_cache = p.plain_cache;
         vo.read_timeout = p.read_timeout;
+        vo.readahead = p.readahead;
+        vo.readahead_max = p.readahead_max;
         vo.sync_timeout = p.sync_timeout;
+        vo.staging_limit = p.staging_limit;
+        vo.staging_high_watermark = p.staging_high_watermark.value_or(0);
+        vo.staging_full_timeout = p.staging_full_timeout;
+        vo.pack_max_age = p.pack_max_age;
         vo.read_only = ctx.args.read_only;
         vfs = std::make_unique<vfs::Vfs>(
             mounted->meta(), mounted->state(), mounted->store(), mounted->committer(),

@@ -567,6 +567,20 @@ TEST_F(TelegramCmds, BackendOfAnAuthorizedSessionConnectsWithoutPrompts) {
     EXPECT_EQ(describe_account(backend.session().me()), "bot @somebody (id 4242)");
 }
 
+// SPEC 7.2: --ro ничего не меняет локально, в том числе учёт кэша чтения не пишется в state.sqlite:
+// TelegramStore в --ro получает tdfiles_dir (учёт в памяти), но не state_db.
+TEST_F(TelegramCmds, ReadOnlyMountDoesNotGiveTheReadCacheAStateDatabase) {
+    write_config("auth = \"bot\"\n");
+    const Loaded l = load_profile(global_);
+    const store::TelegramStoreOptions rw = mount_store_options(l, 1, /*read_only=*/false);
+    EXPECT_EQ(rw.state_db, l.paths.state_db());
+    EXPECT_EQ(rw.tdfiles_dir, l.paths.tdfiles());
+    const store::TelegramStoreOptions ro = mount_store_options(l, 1, /*read_only=*/true);
+    EXPECT_TRUE(ro.state_db.empty());
+    EXPECT_EQ(ro.tdfiles_dir, l.paths.tdfiles());  // кэш и его вытеснение работают, но в памяти
+    EXPECT_EQ(ro.cache_limit, rw.cache_limit);
+}
+
 TEST_F(TelegramCmds, MountWithoutKeyringPointsToLogin) {
     write_config("auth = \"bot\"\nchat_id = -1001\n");
     fs::create_directories(root_ / "mnt");

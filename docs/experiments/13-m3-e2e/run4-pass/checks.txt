@@ -1,0 +1,14 @@
+b1_read|sha-big-B1|PASS|sha256 of the 200 MiB file on B1
+b1_read|cold-read-speed|PASS|9.52 MiB/s in 21.0 s, threshold 6 MiB/s
+b1_read|tree-B1|PASS|sha256, modes and sizes of all files match
+b2_video|video-downloaded|PASS|132.5 MiB (45.30 % of the 292.6 MiB file), limit 3 * (readahead_max 32 + 2 * chunk 8) + header 4 = 148.0 MiB
+inspect1|inspect-names|PASS|document names <16 hex>.bin|.idx, no captions
+inspect1|small-files-fewer-docs|PASS|.bin documents: 69, files outside inline: 310
+inspect1|packs|PASS|about 6 pack documents (69 .bin minus 63 chunks of large files) for 307 packed files
+a_huge|huge-copy|PASS|dd exit 0, fsync exit 0
+a_huge|huge-vmhwm|PASS|VmHWM 68.0 MiB (limit 256 MiB), VmRSS peak 68.0 MiB
+a_huge|huge-staging|PASS|staging+tmp peak 1911.1 MiB, limit 2048.0 MiB
+b3_read|sha-huge-B3|PASS|sha256 of 6 GiB on B3, 7.47 MiB/s in 822.0 s
+b3_read|tdfiles-limit|PASS|tdfiles/ peak 4097.8 MiB (st_blocks), cache_limit 4096.0 MiB + chunk 8 MiB
+final|inspect-names-end|PASS|document names <16 hex>.bin|.idx, no captions (after everything)
+final|no-secrets-in-logs|PASS|0 log files with a token or api_hash

@@ -1,0 +1,14 @@
+[e2e] ---- summary (2026-11-23T03:35:53+03:00, store: telegram) ----
+[e2e] env: telega-fs 128475d + uncommitted changes, branch m3; Linux 7.0.0-42-generic; CPU AMD Ryzen 5 5500U with Radeon Graphics; ffmpeg version 6.1.1-3ubuntu5; fs of the work dir: btrfs
+[e2e] profile: staging_limit 2GiB, cache_limit 4GiB, chunk_size 8 MiB, other settings are the defaults of SPEC 12.2
+[e2e] data: 200 MiB + 325 files / 535.5 MiB in the base set, video 292.6 MiB (306 s), stream 6 GiB; seed prefix 'tgfs-e2e-m3'
+[e2e] time, s: gen video 173.3; mount A 60.6; write to mount 10.5; fsync (upload+commit) 145.2; unmount 1.0
+[e2e]   mount B1 0.7; mount B2 0.8; remount A 5.9; mount B3 1.3
+[e2e] cold read 200 MiB on B1: 21.0 s = 9.52 MiB/s (threshold 6)
+[e2e] video seeks on B2, s: 9.9 / 2.0 / 1.1; downloaded 45.30 % of the file (limit 148.0 MiB)
+[e2e] documents in the channel after the base set: .bin 69, .idx 3; files outside inline 310; packed 307; chunks of large files 63; estimated packs 6
+[e2e] 6 GiB copy: 1224.9 s, fsync 418.2 s, unmount 1.0 s; VmHWM 68.0 MiB, VmRSS peak 68.0 MiB, staging+tmp peak 1911.1 MiB (limit 2GiB)
+[e2e] cold read of 6 GiB on B3: 822.0 s = 7.47 MiB/s; tdfiles/ peak 4097.8 MiB (cache_limit 4GiB + chunk 8 MiB)
+[e2e] documents at the end: .bin 837, .idx 10
+[e2e] FLOOD_WAIT lines in daemon logs: 0 in all (copy of the huge file on A 0, B1 0, B2 0, B3 0); longest wait 0 s; [error] lines 0
+[e2e] checks: 14 PASS, 0 FAIL, 0 SKIP

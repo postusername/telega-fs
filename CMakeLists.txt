@@ -32,9 +32,17 @@ add_library(telega_options INTERFACE)
 target_compile_options(telega_options INTERFACE
     -Wall -Wextra -Wpedantic -Wshadow -Wconversion
     $<$<BOOL:${TELEGA_FS_WERROR}>:-Werror>)
+# FUSE_USE_VERSION: с libfuse 3.12 и новее берём API конфигурации цикла через
+# fuse_loop_cfg_* (можно поднять число рабочих потоков, SPEC 9); на 3.10-3.11 остаётся прежний
+# интерфейс, в котором число потоков не настраивается.
+if(FUSE3_VERSION VERSION_GREATER_EQUAL 3.12)
+    set(TELEGA_FUSE_USE_VERSION 312)
+else()
+    set(TELEGA_FUSE_USE_VERSION 310)
+endif()
 target_compile_definitions(telega_options INTERFACE
     _FILE_OFFSET_BITS=64
-    FUSE_USE_VERSION=310)
+    FUSE_USE_VERSION=${TELEGA_FUSE_USE_VERSION})
 
 add_subdirectory(src)
 

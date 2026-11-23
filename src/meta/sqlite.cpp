@@ -73,6 +73,10 @@ std::string describe(int code, const std::string& what) {
 SqliteError::SqliteError(int code, const std::string& what)
     : std::runtime_error(describe(code, what)), code_(code) {}
 
+bool SqliteError::busy() const noexcept {
+    return primary_code() == SQLITE_BUSY || primary_code() == SQLITE_LOCKED;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Db
 

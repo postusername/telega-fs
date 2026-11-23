@@ -35,6 +35,9 @@ class SqliteError : public std::runtime_error {
     [[nodiscard]] int code() const noexcept { return code_; }
     // Основной код (младший байт расширенного, например SQLITE_CONSTRAINT).
     [[nodiscard]] int primary_code() const noexcept { return code_ & 0xFF; }
+    // SQLITE_BUSY или SQLITE_LOCKED: другое соединение держит блокировку дольше busy_timeout.
+    // Транзиентная ошибка: оператор не выполнялся, его можно повторить.
+    [[nodiscard]] bool busy() const noexcept;
 
   private:
     int code_;

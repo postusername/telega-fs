@@ -9,9 +9,11 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <stdexcept>
 #include <system_error>
 
 #include "common/files.h"
+#include "crypto/chunk.h"
 #include "crypto/keys.h"
 #include "meta/errors.h"
 
@@ -84,7 +86,7 @@ Vfs::Vfs(meta::MetaStore& meta, meta::StateStore& state, store::Store& store,
       committer_(committer),
       keys_(std::move(keys)),
       paths_(std::move(paths)),
-      opts_(options) {
+      opts_(std::move(options)) {
     crypto::init();
     params_ = meta_.read([](Db& db) { return meta::read_params(db); });
     chunk_size_ = params_.chunk_size;
@@ -94,12 +96,80 @@ Vfs::Vfs(meta::MetaStore& meta, meta::StateStore& state, store::Store& store,
     opts_.upload_concurrency = std::max<uint32_t>(opts_.upload_concurrency, 1);
     std::filesystem::create_directories(paths_.staging);
     std::filesystem::create_directories(paths_.tmp);
+    // Учёт staging (SPEC 8.3). Резерв заливки R = число одновременных put_chunk × размер
+    // зашифрованного чанка, плюс открытый текст одного собираемого пакета (до chunk_size):
+    // сборка и шифрование пакетов идут по одному (PackWriter::stage_mu_), а в tmp/ при этом
+    // лежат и открытый текст, и зашифрованный файл.
+    {
+        const uint64_t enc = crypto::chunk_encrypted_size(static_cast<uint64_t>(chunk_size_));
+        const uint64_t reserve =
+            uint64_t{upload_workers()} * enc + static_cast<uint64_t>(chunk_size_);
+        StagingConfig sc;
+        sc.limit = opts_.staging_limit;
+        sc.high = opts_.staging_high_watermark != 0 ? opts_.staging_high_watermark
+                                                    : opts_.staging_limit / 4 * 3;
+        sc.reserve = reserve;
+        if (sc.limit <= reserve) {
+            throw std::invalid_argument(
+                "staging_limit (" + std::to_string(sc.limit) +
+                " bytes) must be larger than the upload reserve " + std::to_string(reserve) +
+                " bytes (concurrent uploads x encrypted chunk + one pack); raise staging_limit "
+                "or lower upload_concurrency");
+        }
+        if (sc.high > sc.limit) {
+            throw std::invalid_argument("staging_high_watermark must not exceed staging_limit");
+        }
+        budget_ = std::make_unique<StagingBudget>(sc, opts_.staging_probe);
+    }
     overlay_ = std::make_unique<Overlay>(state_, paths_.staging, chunk_size_);
+    overlay_->set_budget(budget_.get());
     reader_ = std::make_unique<ChunkReader>(
         store_, keys_.data, params_.fs_uuid,
         ReaderOptions{opts_.plain_cache, opts_.download_concurrency, opts_.read_timeout,
-                      opts_.retry_initial, opts_.retry_max});
+                      opts_.retry_initial, opts_.retry_max, opts_.readahead, opts_.readahead_max});
+    PackConfig pc;
+    pc.chunk_size = chunk_size_;
+    pc.pack_threshold = params_.pack_threshold;
+    pc.pack_target = params_.pack_target;
+    pc.max_age = opts_.pack_max_age;
+    pc.retry_initial = opts_.retry_initial;
+    pc.retry_max = opts_.retry_max;
+    PackHooks ph;
+    ph.stripe = [this](int64_t ino) -> std::shared_mutex& { return stripe(ino); };
+    ph.base_gen = [this] { return base_gen(); };
+    ph.read_only = [this] { return read_only(); };
+    ph.stopping = [this] { return stop_flag_.load(); };
+    ph.backoff = [this](std::chrono::milliseconds& delay) { return backoff(delay); };
+    ph.note_error = [this](const std::string& what) { note_error(what); };
+    ph.submit = [this](uint64_t seq) {
+        Job job;
+        job.kind = Job::Kind::pack;
+        job.seq = seq;
+        push_job(job);
+    };
+    ph.reseal_explicit = [this](int64_t ino) {
+        Job job;
+        job.kind = Job::Kind::seal;
+        job.ino = ino;
+        job.explicit_close = true;
+        push_job(job);
+    };
+    ph.resolve_empty = [this](const ChunkKey& key, uint64_t incarnation) {
+        resolve_empty_position(key, incarnation);
+    };
+    ph.chunk_uploaded = [this] {
+        uploaded_.fetch_add(1);
+        committer_.chunk_uploaded();
+    };
+    ph.acquire_tmp = [this](uint64_t bytes) {
+        return budget_->acquire_internal(bytes, [this] { return stop_flag_.load(); });
+    };
+    ph.probe = opts_.pack_probe;
+    packs_ = std::make_unique<PackWriter>(meta_, state_, store_, *overlay_, keys_, params_.fs_uuid,
+                                          paths_.tmp, pc, std::move(ph));
+    overlay_->set_pack_hook([this](int64_t ino) { packs_->on_dropped(ino); });
     recover();
+    packs_->load(!read_only());
     start_threads();
 }
 
@@ -526,6 +596,9 @@ void Vfs::unlink(int64_t parent, ByteSpan name) {
         }
         if (r == Result::deleted) {
             drop_file_data(child->ino);
+        } else {
+            // Открытый удалённый файл: его данные умрут вместе с ним и в пакет не попадут.
+            packs_->drop(child->ino);
         }
         return;
     }
@@ -620,6 +693,12 @@ void Vfs::rename(int64_t parent, ByteSpan name, int64_t new_parent, ByteSpan new
         }
         if (r == Result::victim_deleted) {
             drop_file_data(dst->ino);
+        } else if (dst && dst->kind == InodeKind::file) {
+            // Открытый удалённый файл: данные умрут вместе с ним, в пакет не попадут.
+            const auto now_dst = meta_.read([&](Db& db) { return meta::get_inode(db, dst->ino); });
+            if (now_dst && !now_dst->parent) {
+                packs_->drop(dst->ino);
+            }
         }
         return;
     }
@@ -677,6 +756,7 @@ void Vfs::release(uint64_t fh) {
         }
         ino = it->second.ino;
         handles_.erase(it);
+        reader_->forget_handle(fh);
         auto r = refs_.find(ino);
         if (r != refs_.end()) {
             r->second.opens -= std::min<uint64_t>(r->second.opens, 1);
@@ -692,7 +772,7 @@ void Vfs::release(uint64_t fh) {
     try {
         maybe_reap(ino);
         if (!read_only() && overlay_->has_chunks(ino)) {
-            push_job(Job{Job::Kind::seal, ino, 0, false});
+            push_job(Job{Job::Kind::seal, ino, 0, false, false, 0});
         }
     } catch (const std::exception& e) {
         spdlog::error("vfs: release of inode {} failed: {}", ino, e.what());
@@ -830,11 +910,91 @@ VfsStatus Vfs::status() {
     s.queued = c.queued;
     s.uploading = c.uploading;
     s.failed = c.failed;
+    const PackStatus ps = packs_->status();
+    s.uploading += ps.closing_packs;
+    s.open_pack_objects = ps.open_objects;
+    s.open_pack_bytes = ps.open_bytes;
+    s.staging_used = budget_->used();
+    s.staging_limit = budget_->config().limit;
     s.uploaded_chunks = uploaded_.load();
     s.fatal = fatal_.load();
     const std::lock_guard lock(err_mu_);
     s.last_error = last_error_;
     return s;
+}
+
+bool Vfs::close_open_pack() {
+    if (read_only() || fatal_.load()) {
+        return false;
+    }
+    return packs_->close_open(false);
+}
+
+PackStatus Vfs::pack_status() const { return packs_->status(); }
+
+// --- учёт staging и обратное давление (SPEC 8.3) ---
+
+void Vfs::wait_for_space(uint64_t shortage, std::chrono::steady_clock::time_point deadline) {
+    if (budget_->never_fits_user(shortage)) {
+        throw FsError(ENOSPC, "write does not fit into staging_limit minus the upload reserve");
+    }
+    constexpr std::chrono::milliseconds kSlice{50};
+    const auto abort = [this] { return fatal_.load() || stop_flag_.load(); };
+    for (;;) {
+        // Сначала освободить место самим: запечатать старое, закрыть пакет.
+        relieve_pressure(shortage);
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            throw FsError(ENOSPC, "staging is full: uploads did not free space in time");
+        }
+        const auto r = budget_->wait_user(shortage, std::min(deadline, now + kSlice), abort);
+        if (r == StagingBudget::WaitResult::ok) {
+            return;
+        }
+        if (r == StagingBudget::WaitResult::aborted) {
+            check_alive();
+            throw FsError(EIO, "file system is shutting down");
+        }
+    }
+}
+
+void Vfs::relieve_pressure(uint64_t extra) {
+    if (read_only() || fatal_.load() || !budget_->above_threshold(extra)) {
+        return;
+    }
+    // Один обходчик за раз: остальные писатели не толкаются, у ждущих свой цикл.
+    const std::unique_lock lock(relieve_mu_, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return;
+    }
+    try {
+        // Меру давления дают длины staging-файлов и внешние файлы без аренды заливок: аренда
+        // освободится сама, а запечатывание освобождает только staging-файлы.
+        const uint64_t leased = budget_->leased();
+        const uint64_t total = budget_->used();
+        const uint64_t used = total > leased ? total - leased : 0;
+        const uint64_t threshold = budget_->pressure_threshold();
+        const uint64_t need_free = used + extra > threshold ? used + extra - threshold : 0;
+        if (need_free == 0) {
+            return;
+        }
+        std::unordered_set<int64_t> detached;
+        {
+            const std::lock_guard refs(refs_mu_);
+            detached = detached_;
+        }
+        const PressurePlan plan = overlay_->plan_pressure(need_free, detached);
+        for (const int64_t ino : plan.inos) {
+            // Без seal_delay: запечатывается весь файл, в том числе недописанные чанки (SPEC 8.1).
+            seal_file(ino, SealMode::release);
+        }
+        // Объекты, запечатанные в открытый пакет, освободят место только после его заливки.
+        packs_->close_open(false);
+    } catch (const FsError& e) {
+        note_error(std::string("relieving staging pressure: ") + e.what());
+    } catch (const SysError& e) {
+        note_error(std::string("relieving staging pressure: ") + e.what());
+    }
 }
 
 }  // namespace telega::vfs

@@ -25,14 +25,17 @@ target_link_libraries(telega_store PUBLIC telega_common)
 # tgstore: TelegramStore и лимитер (SPEC 3, 10.2). Без TDLib: только telega_td.
 add_library(telega_tgstore STATIC
     store/rate_limiter.cpp
+    store/download_scheduler.cpp
+    store/read_cache.cpp
     store/telegram_store.cpp)
-target_link_libraries(telega_tgstore PUBLIC telega_store telega_td)
+target_link_libraries(telega_tgstore PUBLIC telega_store telega_td telega_meta)
 
 # meta: MetaStore, state.sqlite, дельта-журнал (SPEC 6)
 add_library(telega_meta STATIC
     meta/sqlite.cpp
     meta/index_ops.cpp
     meta/index_db.cpp
+    meta/snapshot.cpp
     meta/state_db.cpp)
 target_link_libraries(telega_meta PUBLIC telega_common telega::sqlite)
 
@@ -50,6 +53,9 @@ add_library(telega_vfs STATIC
     vfs/vfs_data.cpp
     vfs/vfs_upload.cpp
     vfs/overlay.cpp
+    vfs/staging_budget.cpp
+    vfs/pack_writer.cpp
+    vfs/pack_compact.cpp
     vfs/chunk_reader.cpp)
 target_link_libraries(telega_vfs PUBLIC telega_meta telega_crypto telega_store)
 

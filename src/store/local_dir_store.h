@@ -1,6 +1,21 @@
 #pragma once
 
 // LocalDirStore: канал в локальном каталоге, с инъекцией сбоев (SPEC 3, 14).
+//
+// Статистика чтения (SPEC 14, приёмка M3). Объект считает успешные вызовы read_range и байты в них
+// (сумма out.size()), а также вызовы prefetch и запрошенные в них байты (сама подсказка ничего не
+// читает). Счётчики ведутся с создания объекта и между запусками не накапливаются. Снимок
+// записывается в файл <dir>/stats при создании и после каждого вызова read_range и prefetch, чтобы
+// его видел интеграционный тест из другого процесса, пока демон работает и после его завершения.
+// Файл пишется целиком во временный stats.tmp и переименовывается (без fsync), поэтому читатель
+// видит согласованный снимок. Формат — четыре строки `<имя> <десятичное число>\n` в таком порядке:
+//
+//   read_range_calls <n>
+//   read_range_bytes <n>
+//   prefetch_calls <n>
+//   prefetch_bytes <n>
+//
+// Тот же снимок отдаёт stats() (разбор файла — parse_store_stats).
 
 #include <array>
 #include <chrono>
@@ -30,12 +45,34 @@ enum class StoreOp : uint8_t {
 
 inline constexpr size_t kStoreOpCount = 7;
 
+// Счётчики чтения (см. шапку файла).
+struct StoreStats {
+    uint64_t read_range_calls = 0;
+    uint64_t read_range_bytes = 0;
+    uint64_t prefetch_calls = 0;
+    uint64_t prefetch_bytes = 0;
+
+    bool operator==(const StoreStats&) const = default;
+};
+
+// Имя файла статистики в каталоге хранилища.
+inline constexpr const char* kStatsFileName = "stats";
+
+// Разобрать содержимое файла статистики; нераспознанные строки пропускаются.
+StoreStats parse_store_stats(std::string_view text);
+// Прочитать файл статистики каталога хранилища; нет файла — нули.
+StoreStats read_store_stats(const std::filesystem::path& dir);
+
 enum class FaultAction : uint8_t {
     transient,     // бросить StoreError(transient) вместо операции
     permanent,     // бросить StoreError(permanent) вместо операции
     crash_before,  // вызвать crash-обработчик до операции
     crash_after,  // выполнить операцию, затем вызвать crash-обработчик
     delay,  // подождать delay, затем выполнить операцию
+    // Ограничить пропускную способность заливки (put_chunk, put_index) до bytes_per_sec байт в
+    // секунду на всё хранилище сразу: параллельные заливки делят полосу. Это свойство хранилища,
+    // а не отдельного вызова, поэтому номер вызова должен быть `*`; действует с set_faults.
+    bandwidth,
 };
 
 struct FaultRule {
@@ -43,6 +80,7 @@ struct FaultRule {
     std::optional<uint64_t> nth;  // номер вызова этой операции с 1; nullopt — каждый вызов
     FaultAction action = FaultAction::transient;
     std::chrono::milliseconds delay{0};
+    uint64_t bytes_per_sec = 0;  // для FaultAction::bandwidth
 };
 
 // Переменная окружения с правилами сбоев для бинарника (SPEC 3).
@@ -68,6 +106,8 @@ class LocalDirStore final : public Store {
     void set_crash_handler(std::function<void()> handler);
     // Счётчик вызовов операции (для тестов).
     uint64_t call_count(StoreOp op) const;
+    // Счётчики чтения этого объекта.
+    StoreStats stats() const;
 
     // Для тестов и fsck: список существующих сообщений по возрастанию.
     std::vector<int64_t> list_messages() const;
@@ -76,6 +116,8 @@ class LocalDirStore final : public Store {
 
     ChunkRef put_chunk(const std::filesystem::path& encrypted_file) override;
     void read_range(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out) override;
+    // Ничего не скачивает: только считает вызов и байты (SPEC 8.2, 14).
+    void prefetch(const ChunkRef& ref, uint64_t offset, uint64_t len, uint32_t distance) override;
     void delete_messages(std::span<const int64_t> msg_ids) override;
     std::optional<HeadInfo> read_head() override;
     Bytes read_index(int64_t msg_id) override;
@@ -97,9 +139,16 @@ class LocalDirStore final : public Store {
     template <class Body>
     auto run_op(StoreOp op, Body&& body);
 
+    // Прибавить к счётчикам и переписать файл статистики.
+    void count_read(uint64_t bytes);
+    void count_prefetch(uint64_t bytes);
+    void write_stats_locked() const;
+
     std::filesystem::path msg_path(int64_t msg_id) const;
     // Выделить id (долговечно сдвинуть next_id) и скопировать файл в msgs/<id>.
-    int64_t put_message(const std::filesystem::path& src);
+    int64_t put_message(const std::filesystem::path& src, StoreOp op);
+    // Выдержать полосу заливки перед записью очередного блока из n байт (FaultAction::bandwidth).
+    void throttle_put(StoreOp op, uint64_t n);
 
     // Под mu_: состояние на диске.
     int64_t load_next_id_locked() const;
@@ -113,6 +162,13 @@ class LocalDirStore final : public Store {
     std::vector<FaultRule> rules_;
     std::function<void()> crash_handler_;
     std::array<uint64_t, kStoreOpCount> calls_{};
+    std::array<uint64_t, kStoreOpCount> bandwidth_{};  // байт/с по операциям, 0 — без ограничения
+
+    std::mutex bandwidth_mu_;  // лист: резерв времени в общей полосе заливки
+    std::chrono::steady_clock::time_point bandwidth_free_;
+
+    mutable std::mutex stats_mu_;  // лист: счётчики и файл статистики
+    StoreStats stats_;
 };
 
 // Исключение, которое бросает crash-обработчик в тестах внутри одного процесса.

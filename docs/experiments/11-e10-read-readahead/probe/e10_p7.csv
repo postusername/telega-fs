@@ -1,0 +1,22 @@
+series,rep,step,ok,ms,net_recv_kib,note
+p7-r1,1,before restart: X,1,,,"downloaded 8390696, prefix 8390696, st_blocks 8392704"
+p7-r1,1,before restart: Y,1,,,"downloaded 3145728, prefix 3145728, st_blocks 3145728"
+p7-r1,1,before restart: Z,1,,,"downloaded 8390696, prefix 8390696, st_blocks 8392704"
+p7-r1,1,deleteFile full,1,2.5,,"st_blocks of the file 8392704 -> -1, files dir 172044288 -> 163651584 bytes"
+p7-r1,1,deleteFile partial,1,1.1,,"st_blocks of the file 3145728 -> -1, files dir 163651584 -> 160505856 bytes"
+p7-r1,1,getRemoteFile X,1,0.7,0.0,"path same: yes, file exists: yes, size 8390696, downloaded 8390696 (was 8390696), completed yes, prefix(0) 8390696 (was 8390696)"
+p7-r1,1,getRemoteFile Y,1,0.2,0.0,"path same: yes, file exists: yes, size 8390696, downloaded 3145728 (was 3145728), completed no, prefix(0) 3145728 (was 3145728)"
+p7-r1,1,getRemoteFile Z,1,0.3,0.0,"path same: yes, file exists: no, size 8390696, downloaded 8390696 (was 8390696), completed yes, prefix(0) 0 (was 8390696)"
+p7-r1,1,network during getRemoteFile and prefix checks,1,,0.0,KiB received
+p7-r1,1,pread X after restart,1,,0.0,all 128 segments decrypt and match
+p7-r1,1,pread Y prefix after restart,1,,0.0,47 segments
+p7-r1,1,downloadFile X whole (already downloaded),1,0.5,0.0,expect no network
+p7-r1,1,"downloadFile Y [0, 3 MiB) (already downloaded)",1,0.7,0.0,expect no network
+p7-r1,1,"downloadFile Y [3 MiB, 4 MiB) (rest)",1,372.4,0.0,expect about 1 MiB
+p7-r1,1,"pread Y [3 MiB, 4 MiB) after resume",1,,0.0,
+p7-r1,1,Z file removed behind TDLib before restart,1,,0.0,old path exists: no
+p7-r1,1,downloadFile Z whole (file was removed),1,694.0,9238.1,expect about 8 MiB
+p7-r1,1,pread Z after re-download,1,,0.0,
+p7-r1,1,downloadFile U whole (first),1,687.7,8212.8,about 8 MiB
+p7-r1,1,downloadFile U whole (file removed while TDLib runs),1,688.7,8212.6,expect about 8 MiB
+p7-r1,1,pread U after re-download,1,,0.0,new path equals old: yes

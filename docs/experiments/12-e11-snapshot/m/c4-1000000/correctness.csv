@@ -1,0 +1,4 @@
+corpus,variant,rep,integrity_ok,integrity_ms,patches_applied,patches,patch_bytes,tables,rows_compared,mismatches,apply_ms,compare_ms,first_mismatch,apply_error
+c4-1000000,m,1,1,1371,1,6,490123,5,2440570,0,3112,1248,-,-
+c4-1000000,m,2,1,1368,1,7,639360,5,2440570,0,3639,1266,-,-
+c4-1000000,m,3,1,1373,1,6,492427,5,2440570,0,2472,1260,-,-

@@ -11,11 +11,13 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -102,9 +104,95 @@ inline VfsOptions fast_options() {
     return o;
 }
 
+// Store с воротами на put_chunk: пока ворота закрыты, вызовы стоят внутри put_chunk. Тест ждёт
+// заданного числа вошедших вызовов (барьер) и открывает ворота. Остальное пробрасывается.
+class GateStore final : public store::Store {
+  public:
+    explicit GateStore(store::Store& inner) : inner_(inner) {}
+
+    void close_gate() {
+        const std::lock_guard lock(mu_);
+        closed_ = true;
+    }
+    void open_gate() {
+        {
+            const std::lock_guard lock(mu_);
+            closed_ = false;
+        }
+        cv_.notify_all();
+    }
+    // Ждать, пока в put_chunk войдёт всего не меньше n вызовов с момента создания.
+    [[nodiscard]] bool wait_entered(int n, milliseconds timeout = milliseconds(10'000)) {
+        std::unique_lock lock(mu_);
+        return cv_.wait_for(lock, timeout, [&] { return entered_ >= n; });
+    }
+    [[nodiscard]] int entered() const {
+        const std::lock_guard lock(mu_);
+        return entered_;
+    }
+    // Размеры файлов, с которыми вызывался put_chunk, в порядке вызовов.
+    [[nodiscard]] std::vector<uint64_t> put_sizes() const {
+        const std::lock_guard lock(mu_);
+        return sizes_;
+    }
+
+    store::ChunkRef put_chunk(const std::filesystem::path& file) override {
+        {
+            std::unique_lock lock(mu_);
+            ++entered_;
+            sizes_.push_back(std::filesystem::file_size(file));
+            cv_.notify_all();
+            cv_.wait(lock, [&] { return !closed_; });
+        }
+        return inner_.put_chunk(file);
+    }
+    // Ворота на read_range: пока закрыты, чтения стоят внутри (медленная сеть).
+    void close_read_gate() {
+        const std::lock_guard lock(mu_);
+        read_closed_ = true;
+    }
+    void open_read_gate() {
+        {
+            const std::lock_guard lock(mu_);
+            read_closed_ = false;
+        }
+        cv_.notify_all();
+    }
+    // Ждать, пока в read_range войдёт всего не меньше n вызовов с момента создания.
+    [[nodiscard]] bool wait_reads_entered(int n, milliseconds timeout = milliseconds(10'000)) {
+        std::unique_lock lock(mu_);
+        return cv_.wait_for(lock, timeout, [&] { return reads_entered_ >= n; });
+    }
+    void read_range(const store::ChunkRef& r, uint64_t off, std::span<std::byte> out) override {
+        {
+            std::unique_lock lock(mu_);
+            ++reads_entered_;
+            cv_.notify_all();
+            cv_.wait(lock, [&] { return !read_closed_; });
+        }
+        inner_.read_range(r, off, out);
+    }
+    void delete_messages(std::span<const int64_t> ids) override { inner_.delete_messages(ids); }
+    std::optional<store::HeadInfo> read_head() override { return inner_.read_head(); }
+    Bytes read_index(int64_t id) override { return inner_.read_index(id); }
+    int64_t put_index(const std::filesystem::path& f) override { return inner_.put_index(f); }
+    void set_head(int64_t n, std::optional<int64_t> o) override { inner_.set_head(n, o); }
+
+  private:
+    store::Store& inner_;
+    mutable std::mutex mu_;
+    std::condition_variable cv_;
+    bool closed_ = false;
+    bool read_closed_ = false;
+    int entered_ = 0;
+    int reads_entered_ = 0;
+    std::vector<uint64_t> sizes_;
+};
+
 class VfsEnv {
   public:
-    explicit VfsEnv(int64_t inline_max = 4096, int64_t inline_budget = 16 << 20) {
+    explicit VfsEnv(int64_t inline_max = 4096, int64_t inline_budget = 16 << 20,
+                    int64_t pack_threshold = 1 << 16, int64_t pack_target = kChunk) {
         meta::InitParams p;
         for (size_t i = 0; i < p.fs_uuid.size(); ++i) {
             p.fs_uuid[i] = static_cast<std::byte>(0x30 + i);
@@ -112,8 +200,8 @@ class VfsEnv {
         p.chunk_size = kChunk;
         p.inline_max = inline_max;
         p.inline_budget = inline_budget;
-        p.pack_threshold = 1 << 16;
-        p.pack_target = kChunk;
+        p.pack_threshold = pack_threshold;
+        p.pack_target = pack_target;
         p.root_uid = 1000;
         p.root_gid = 1000;
         p.now_ns = 1'000'000'000;
@@ -145,7 +233,7 @@ class VfsEnv {
         state = std::make_unique<meta::StateStore>(state_path());
     }
 
-    Vfs& start(VfsOptions o = fast_options()) {
+    Vfs& start(const VfsOptions& o = fast_options()) {
         options = o;
         vfs = std::make_unique<Vfs>(*meta, *state,
                                     override_store != nullptr ? *override_store : *store, committer,
@@ -156,7 +244,7 @@ class VfsEnv {
     // «Падение» и перезапуск: Vfs уничтожается без заливки, базы открываются заново.
     // Как монтирование (SPEC 7.2, шаг 8), удаляет отсоединённые inode.
     Vfs& restart() { return restart(options); }
-    Vfs& restart(VfsOptions o) {
+    Vfs& restart(const VfsOptions& o) {
         vfs.reset();
         state.reset();
         meta.reset();

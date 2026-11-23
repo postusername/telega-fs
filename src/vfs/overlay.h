@@ -23,10 +23,12 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "meta/state_db.h"
+#include "vfs/staging_budget.h"
 
 namespace telega::vfs {
 
@@ -56,6 +58,9 @@ struct ChunkWrite {
     int64_t idx = 0;
     uint64_t from = 0;
     uint64_t to = 0;
+    // Длина staging-файла позиции после этой записи (SPEC 8.3): Overlay запоминает её как
+    // учтённую. Место под рост уже занято вызывающим (StagingBudget).
+    uint64_t file_len = 0;
 };
 
 // Цель ожидания fsync/flush_all.
@@ -63,6 +68,22 @@ struct UploadTarget {
     ChunkKey key;
     uint64_t incarnation = 0;
     int64_t version = 0;
+};
+
+// Объект пакета, чья заливка применена (SPEC 6.5).
+struct PackedObject {
+    ChunkKey key;  // позиция 0 файла
+    uint64_t incarnation = 0;
+    int64_t version = 0;
+};
+
+// План запечатывания под давлением на staging (SPEC 8.1, 8.3).
+struct PressurePlan {
+    // Учтённые байты чанков, которые уже освобождаются сами: в очереди, в заливке, в пакете,
+    // залитые (последние учитываются, когда пакет закрыт).
+    uint64_t in_flight = 0;
+    // inode, которые надо запечатать, от самых старых по last_write_ns.
+    std::vector<int64_t> inos;
 };
 
 struct OverlayCounts {
@@ -79,6 +100,24 @@ class Overlay {
 
     // Поднять записи из state.sqlite (при старте, до любых операций).
     void load();
+
+    // Учёт места staging (SPEC 8.3). Ставится до запуска потоков; без него Overlay места не
+    // считает. Overlay возвращает место, когда убирает позицию или обрезает файл; рост
+    // занимает вызывающий до записи (StagingBudget::try_acquire_user).
+    void set_budget(StagingBudget* budget) { budget_ = budget; }
+    // Пересчёт после восстановления: длины staging-файлов с диска. Возвращает сумму.
+    uint64_t recount_staged();
+    // Учтённая длина staging-файла позиции (0 — позиции нет).
+    [[nodiscard]] uint64_t staged(const ChunkKey& key) const;
+    // План запечатывания: освободить need_free байт, помимо того, что и так освобождается.
+    // skip — inode, которые запечатывать нельзя (удалены, но открыты).
+    [[nodiscard]] PressurePlan plan_pressure(uint64_t need_free,
+                                             const std::unordered_set<int64_t>& skip) const;
+
+    // Позиция 0 файла ушла из overlay (unlink, truncate, инлайн, пустой файл): строка открытого
+    // пакета удаляется в той же транзакции state.sqlite, а потом вызывается hook(ino), чтобы
+    // PackWriter убрал объект из своего образа. Ставится до запуска потоков.
+    void set_pack_hook(std::function<void(int64_t ino)> hook);
 
     static std::string file_name(const ChunkKey& key);
     [[nodiscard]] std::filesystem::path path_of(const ChunkKey& key) const;
@@ -105,7 +144,7 @@ class Overlay {
     // Одной транзакцией state.sqlite: upsert каждой позиции (version++) и dirty_attrs.
     void commit_write(int64_t ino, std::span<const ChunkWrite> writes,
                       const meta::DirtyAttrs& attrs, int64_t now_ns);
-    // version++ без записи данных: staging обрезан truncate до cut_len байт.
+    // version++ без записи данных: staging обрезан truncate до cut_len байт (учёт уменьшается).
     void cut(const ChunkKey& key, int64_t cut_len, int64_t now_ns);
     void set_attrs(const meta::DirtyAttrs& attrs);
     void clear_attrs(int64_t ino);
@@ -122,6 +161,22 @@ class Overlay {
     // и запись журнала загрузок. Иначе запомнить, что версия version залита.
     void finish_upload(const ChunkKey& key, uint64_t incarnation, int64_t version, bool clear_attrs,
                        int64_t chunk_id);
+
+    // --- пакеты (SPEC 6.5) ---
+
+    // Позиция запечатана в открытый пакет на версии version: таймер её не трогает, пока
+    // version не изменилась. false — у чанка постоянная ошибка той же версии, а запрос не
+    // явный (как mark_queued): в пакет не класть. Явный запрос сбрасывает ошибку.
+    bool mark_packed(const ChunkKey& key, int64_t version, bool explicit_request);
+    // Позиция больше не считается лежащей в открытом пакете (стала позиционной).
+    void clear_packed(const ChunkKey& key);
+    // Пакет не удался постоянной ошибкой: ожидающие fsync получают EIO, таймер позицию не берёт,
+    // пока её не запечатают явно.
+    void mark_failed(const ChunkKey& key, uint64_t incarnation, int64_t version);
+    // Пакет применён к индексу (SPEC 6.5): одной транзакцией state.sqlite для каждого объекта
+    // удалить строку dirty_chunks (при той же version), dirty_attrs и строку open_pack, затем
+    // запись журнала загрузок. Файлы staging удаляются, ожидающие просыпаются.
+    void finish_pack(int64_t chunk_id, std::span<const PackedObject> applied);
 
     // --- расписание загрузок ---
 
@@ -173,6 +228,10 @@ class Overlay {
         int64_t applied_version = 0;
         int64_t failed_version = 0;
         int64_t cut_len = INT64_MAX;
+        // Версия, запечатанная в открытый пакет (0 — не в пакете). Только в памяти.
+        int64_t packed_version = 0;
+        // Длина staging-файла, учтённая в StagingBudget (SPEC 8.3).
+        uint64_t staged = 0;
     };
     enum class TargetState : uint8_t { pending, done, failed };
 
@@ -180,6 +239,11 @@ class Overlay {
     void remove_file(const ChunkKey& key) const;
     TargetState target_state_locked(const UploadTarget& t) const;
     static void add_coverage(Entry& e, uint64_t from, uint64_t to);
+    void release_staged(uint64_t bytes) const {
+        if (budget_ != nullptr && bytes != 0) {
+            budget_->release(bytes);
+        }
+    }
 
     meta::StateStore& state_;
     std::filesystem::path dir_;
@@ -190,6 +254,8 @@ class Overlay {
     std::map<ChunkKey, Entry> chunks_;
     std::unordered_map<int64_t, meta::DirtyAttrs> attrs_;
     uint64_t next_incarnation_ = 1;
+    std::function<void(int64_t)> pack_hook_;
+    StagingBudget* budget_ = nullptr;
 };
 
 }  // namespace telega::vfs

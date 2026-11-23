@@ -185,6 +185,11 @@ std::optional<Chunk> get_chunk(Db& db, int64_t chunk_id);
 std::optional<Chunk> find_chunk_by_mac(Db& db, ByteSpan mac, int64_t plain_size);
 // Мёртвые чанки (refcount = 0) с dead_since_gen ≤ max_dead_gen, по chunk_id, не больше limit.
 std::vector<Chunk> list_gc_candidates(Db& db, int64_t max_dead_gen, int64_t limit = INT64_MAX);
+// Пакеты для уплотнения (SPEC 6.5): kind = 2, refcount > 0 и live_bytes / plain_size <
+// ratio_ppm / 1 000 000, по chunk_id.
+std::vector<Chunk> list_compaction_candidates(Db& db, int64_t ratio_ppm);
+// Живые экстенты этих пакетов (один проход по extents), по chunk_id и chunk_off.
+std::vector<Extent> list_compaction_extents(Db& db, int64_t ratio_ppm);
 // Удалить строку чанка. Живой чанк (refcount > 0) — logic_error.
 void delete_chunk_row(Db& db, int64_t chunk_id);
 

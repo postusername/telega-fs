@@ -3,6 +3,7 @@
 #include "store/telegram_store.h"
 
 #include <gtest/gtest.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include <vector>
 
 #include "fake_telegram.h"
+#include "meta/sqlite.h"
 #include "td/td_runtime.h"
 
 namespace telega::store {
@@ -49,6 +51,19 @@ std::string pattern(size_t size, uint32_t seed) {
         s[i] = static_cast<char>((uint64_t{i} * 131U + uint64_t{seed} * 17U + (i >> 8U)) & 0xFFU);
     }
     return s;
+}
+
+// Опрос наблюдаемого условия (барьер для тестов с потоками: ждём события, а не время).
+template <class P>
+bool wait_for(P pred, milliseconds timeout = seconds{10}) {
+    const auto deadline = Clock::now() + timeout;
+    while (!pred()) {
+        if (Clock::now() > deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(milliseconds{1});
+    }
+    return true;
 }
 
 RateLimiterOptions unlimited() {
@@ -85,10 +100,11 @@ class TelegramStoreTest : public ::testing::Test {
         o.read_timeout = milliseconds{3000};
         o.send_timeout = milliseconds{3000};
         o.call_timeout = milliseconds{1500};
+        o.download_failure_guard = milliseconds{20};
         return o;
     }
 
-    TelegramStore& make(std::optional<TelegramStoreOptions> options = std::nullopt) {
+    TelegramStore& make(const std::optional<TelegramStoreOptions>& options = std::nullopt) {
         store =
             std::make_unique<TelegramStore>(*client, *limiter, options.value_or(default_options()));
         return *store;
@@ -881,7 +897,7 @@ TEST_F(ReadTest, RemoteFileIdWithKnownSizeSkipsGetMessages) {
     ASSERT_EQ(d.size(), 1U);
     EXPECT_EQ(d[0]["offset"], 1234);
     EXPECT_EQ(d[0]["limit"], 777);
-    EXPECT_EQ(d[0]["synchronous"], true);
+    EXPECT_EQ(d[0]["synchronous"], false);  // планировщик качает только асинхронно (SPEC 8.2)
     // Второе чтение берёт file_id из кэша процесса.
     EXPECT_EQ(read(ref, 0, 100), content.substr(0, 100));
     EXPECT_EQ(fake->count("getRemoteFile"), 1U);
@@ -966,11 +982,11 @@ TEST_F(ReadTest, TwoDownloadErrorsInARowAreReportedByKind) {
 // кругов и до своего дедлайна), а не отдаёт EIO после второй.
 TEST_F(ReadTest, CanceledDownloadsAreRetriedWithFreshFileIdUntilTheyPass) {
     const ChunkRef ref{msg_id, remote_id};
-    fake->cancel_next_downloads(4);
+    fake->fail_next_windows(4);  // асинхронный обрыв: апдейт «не качается», без ошибки
     EXPECT_EQ(read(ref, 100, 200), content.substr(100, 200));
     EXPECT_EQ(fake->count("downloadFile"), 5U);
     EXPECT_GE(fake->count("getMessages"), 1U);  // file_id обновлён из сообщения
-    fake->cancel_next_downloads(3, /*another_request=*/true);
+    fake->fail_next_windows(3);
     EXPECT_EQ(read(ref, 300, 100), content.substr(300, 100));
 }
 
@@ -980,7 +996,7 @@ TEST_F(ReadTest, EndlessCancelsEndAsTransientAfterTheRoundLimit) {
     auto o = default_options();
     o.read_timeout = seconds{30};
     auto& s = make(o);
-    fake->cancel_next_downloads(1000);
+    fake->fail_next_windows(1000);
     std::string out(10, '\0');
     const auto t0 = Clock::now();
     const auto e = error_of(
@@ -995,7 +1011,7 @@ TEST_F(ReadTest, CancelsStopAtTheDeadlineOfTheCallBeforeTheRoundLimit) {
     auto o = default_options();
     o.read_timeout = milliseconds{200};
     auto& s = make(o);
-    fake->cancel_next_downloads(1000);
+    fake->fail_next_windows(1000);
     std::string out(10, '\0');
     const auto t0 = Clock::now();
     const auto e = error_of(
@@ -1011,12 +1027,12 @@ TEST_F(ReadTest, ReadHeadAndReadIndexRetryCanceledDownloadsToo) {
     const std::string blob = pattern(2000, 305);
     const int64_t id = fake->seed_document(blob);
     fake->seed_pin(id);
-    fake->cancel_next_downloads(3);
+    fake->fail_next_windows(3);
     const auto head = s.read_head();
     ASSERT_TRUE(head.has_value());
     EXPECT_EQ(std::string(reinterpret_cast<const char*>(head->header.data()), head->header.size()),
               blob.substr(0, 256));
-    fake->cancel_next_downloads(3, /*another_request=*/true);
+    fake->fail_next_windows(3);
     const Bytes data = s.read_index(id);
     EXPECT_EQ(std::string(reinterpret_cast<const char*>(data.data()), data.size()), blob);
 }
@@ -1037,26 +1053,49 @@ TEST_F(ReadTest, ChunkJustSentByThisProcessIsReadableAfterTheLinkIsGone) {
 TEST_F(ReadTest, VanishedLocalFileIsDownloadedAgain) {
     fake->set_sent_files_stale(true);
     const ChunkRef ref = store->put_chunk(big_file("own2", 88));
-    fake->vanish_next_downloads(2);
+    fake->set_probe_lies(2);  // «скачано», а файла нет: pread даёт ENOENT, и так дважды
     EXPECT_EQ(read(ref, 100, 200), pattern(3000, 88).substr(100, 200));
-    EXPECT_EQ(fake->count("downloadFile"), 3U);
+    EXPECT_EQ(fake->count("downloadFile"), 1U);
 
     const int64_t idx = store->put_index(big_file("own-idx", 89, 1500));
-    fake->vanish_next_downloads(1);
+    fake->set_probe_lies(1);
     const Bytes data = store->read_index(idx);
     EXPECT_EQ(std::string(reinterpret_cast<const char*>(data.data()), data.size()),
               pattern(1500, 89));
     EXPECT_EQ(fake->count("deleteFile"), 0U);
 }
 
-// Повторы по ENOENT входят в тот же предел кругов, что и повторы после отмены, и не бесконечны.
-TEST_F(ReadTest, LocalFileThatKeepsVanishingGivesUpAfterTheRoundLimit) {
+// Файл, который этот процесс отправил, TDLib считает локальным и готовым целиком (getFile и
+// getFileDownloadedPrefixSize диск не проверяют), а временной ссылки, с которой он ушёл, уже нет.
+// pread даёт ENOENT, и диапазон идёт обычным downloadFile: TDLib сам проверяет путь и качает с
+// сервера (FileManager::download -> check_local_location_async). Это чанк, голова и блоб индекса.
+TEST_F(ReadTest, FileSentByThisProcessIsDownloadedWhenItsLinkIsGone) {
+    const ChunkRef ref = store->put_chunk(big_file("sent-chunk", 90));
+    EXPECT_EQ(read(ref, 100, 200), pattern(3000, 90).substr(100, 200));
+    EXPECT_EQ(fake->count("downloadFile"), 1U);
+    EXPECT_EQ(fake->count("getMessages"), 0U);  // file_id не менялся: повторов по кругам не было
+    EXPECT_EQ(fake->count("deleteFile"), 0U);
+
+    const std::string blob = pattern(1500, 91);
+    const int64_t idx = store->put_index(big_file("sent-idx", 91, 1500));
+    const Bytes data = store->read_index(idx);
+    EXPECT_EQ(std::string(reinterpret_cast<const char*>(data.data()), data.size()), blob);
+    store->set_head(idx, std::nullopt);
+    const auto head = store->read_head();
+    ASSERT_TRUE(head.has_value());
+    EXPECT_EQ(head->msg_id, idx);
+    EXPECT_EQ(std::string(reinterpret_cast<const char*>(head->header.data()), head->header.size()),
+              blob.substr(0, kHeadHeaderSize));
+}
+
+// «Скачано», а файла нет и после ответа TDLib на prefix (гонка): диапазон скачивается заново, а
+// getFileDownloadedPrefixSize второй раз не спрашивается.
+TEST_F(ReadTest, ReadyRangeWithoutLocalFileIsDownloadedOnce) {
     const ChunkRef ref{msg_id, remote_id};
-    fake->vanish_next_downloads(1000);
-    const auto e = error_of([&] { (void)read(ref, 0, 10); });
-    ASSERT_TRUE(e.has_value());
-    EXPECT_EQ(e->kind(), StoreErrorKind::permanent);
-    EXPECT_EQ(fake->count("downloadFile"), 5U);
+    fake->set_probe_lies(1000);
+    EXPECT_EQ(read(ref, 0, 10), content.substr(0, 10));
+    EXPECT_EQ(fake->count("getFileDownloadedPrefixSize"), 1U);
+    EXPECT_EQ(fake->count("downloadFile"), 1U);
 }
 
 TEST_F(ReadTest, DeletedMessageIsNotFound) {
@@ -1117,31 +1156,90 @@ TEST_F(ReadTest, NoAnswerIsTransientTimeout) {
 }
 
 TEST_F(ReadTest, DownloadConcurrencyIsBounded) {
-    fake->set_download_delay(milliseconds{100});
+    fake->set_download_mode(FakeTelegram::DownloadMode::manual);
     auto o = default_options();
     o.download_concurrency = 2;
+    o.read_timeout = seconds{20};
     auto& s = make(o);
-    // Запросы по одному файлу идут по очереди, поэтому файлов столько же, сколько потоков.
+    constexpr int kFiles = 6;
     std::vector<ChunkRef> refs;
-    for (int t = 0; t < 6; ++t) {
+    std::vector<int32_t> file_ids;
+    for (int t = 0; t < kFiles; ++t) {
         const int64_t id = fake->seed_document(content);
         refs.push_back({id, fake->message(id)->remote_id});
-        (void)read(refs.back(), 0, 1);  // file_id попадает в кэш
+        file_ids.push_back(fake->message(id)->file_id);
     }
+    std::atomic<int> finished{0};
     std::vector<std::thread> threads;
-    threads.reserve(6);
-    for (int t = 0; t < 6; ++t) {
+    threads.reserve(kFiles);
+    for (int t = 0; t < kFiles; ++t) {
         threads.emplace_back([&, t] {
             std::string out(10, '\0');
             s.read_range(refs[static_cast<size_t>(t)], static_cast<uint64_t>(t) * 10,
                          std::as_writable_bytes(std::span{out}));
             EXPECT_EQ(out, content.substr(static_cast<size_t>(t) * 10, 10));
+            ++finished;
         });
+    }
+    // Барьер: все шесть читателей ждут, а окон открыто ровно два.
+    ASSERT_TRUE(wait_for([&] { return s.download_stats().waiting == kFiles; }));
+    // Счётчик запросов растёт при получении, а окно открывается позже: барьер — два одновременно
+    // открытых окна у самого TDLib (иначе run_downloads мог бы закончить первое окно до открытия
+    // второго, и пик одновременности остался бы 1).
+    ASSERT_TRUE(wait_for([&] { return fake->max_active_windows() == 2; }));
+    ASSERT_TRUE(wait_for([&] { return s.download_stats().plans_since_event >= 1; }));
+    EXPECT_EQ(fake->count("downloadFile"), 2U);
+    while (finished.load() < kFiles) {
+        fake->run_downloads();
+        std::this_thread::yield();
     }
     for (auto& t : threads) {
         t.join();
     }
-    EXPECT_EQ(fake->max_inflight_downloads(), 2);
+    EXPECT_EQ(fake->max_active_windows(), 2);
+    EXPECT_EQ(s.download_stats().max_active, 2U);
+}
+
+// Пока общая пауза FLOOD_WAIT не кончилась, планировщик спит до её конца (или до события), а не
+// крутит проходы: ждущему читателю с нулевым retry_at раньше «пора проснуться» было в прошлом.
+TEST_F(ReadTest, FloodPauseDoesNotMakeTheSchedulerSpin) {
+    fake->set_download_mode(FakeTelegram::DownloadMode::manual);
+    auto o = default_options();
+    o.download_concurrency = 1;
+    o.read_timeout = seconds{20};
+    auto& s = make(o);
+    std::vector<ChunkRef> refs;
+    for (int i = 0; i < 3; ++i) {
+        const int64_t id = fake->seed_document(content);
+        refs.push_back({id, fake->message(id)->remote_id});
+    }
+    std::vector<std::thread> threads;
+    threads.emplace_back([&] { (void)error_of([&] { (void)read(refs[0], 0, 10); }); });
+    ASSERT_TRUE(wait_for([&] { return s.download_stats().active_now == 1; }));
+    threads.emplace_back([&] { (void)error_of([&] { (void)read(refs[1], 0, 10); }); });
+    ASSERT_TRUE(wait_for([&] { return s.download_stats().waiting == 2; }));
+    fake->fail_next("getRemoteFile", td_error(429, "Too Many Requests: retry after 3"));
+    threads.emplace_back([&] { (void)error_of([&] { (void)read(refs[2], 0, 10); }); });
+    // Пауза началась (флуд пришёл на getRemoteFile третьего читателя).
+    ASSERT_TRUE(wait_for([&] { return fake->count("getRemoteFile") >= 3; }));
+    std::this_thread::sleep_for(milliseconds{300});
+    const uint64_t before = s.download_stats().plans;
+    std::this_thread::sleep_for(milliseconds{1500});
+    const uint64_t passes = s.download_stats().plans - before;
+    // Проход раз в секунду (потолок ожидания) и по событиям; прежде было десятки тысяч.
+    EXPECT_LT(passes, 20U);
+    std::atomic<bool> done{false};
+    std::thread driver([&] {
+        while (!done) {
+            fake->run_downloads();
+            std::this_thread::sleep_for(milliseconds{5});
+        }
+    });
+    for (auto& t : threads) {
+        t.join();
+    }
+    done = true;
+    driver.join();
 }
 
 TEST_F(ReadTest, ConcurrentReadsReturnTheirOwnRanges) {
@@ -1175,8 +1273,8 @@ TEST_F(ReadTest, ConcurrentReadsReturnTheirOwnRanges) {
 // another downloadFile request», E2E): пользовательское чтение и readahead одного чанка не должны
 // идти параллельно, иначе они отменяют друг друга и чтение отдаёт EIO.
 TEST_F(ReadTest, ReadsOfTheSameFileDoNotCancelEachOther) {
-    fake->set_download_delay(milliseconds{30});
-    fake->set_cancel_overlapping_downloads(true);
+    fake->set_part_size(256);
+    fake->set_part_delay(milliseconds{2});
     auto o = default_options();
     o.download_concurrency = 4;
     auto& s = make(o);
@@ -1260,7 +1358,8 @@ TEST_F(TelegramStoreTest, ReadIndexReturnsWholeDocument) {
     EXPECT_EQ(std::string(reinterpret_cast<const char*>(data.data()), data.size()), blob);
     const auto d = fake->requests("downloadFile");
     ASSERT_EQ(d.size(), 1U);
-    EXPECT_EQ(d[0]["limit"], 0);
+    EXPECT_EQ(d[0]["offset"], 0);
+    EXPECT_EQ(d[0]["limit"], 70'000);  // блоб целиком: limit равен размеру файла
 }
 
 TEST_F(TelegramStoreTest, ReadIndexOfMissingMessageIsNotFound) {
@@ -1556,6 +1655,838 @@ TEST_F(TelegramStoreTest, RoundTripChunkIndexHeadAndDelete) {
     s.delete_messages(both);
     EXPECT_TRUE(fake->messages().empty());
     EXPECT_FALSE(s.read_head().has_value());
+}
+
+// ---- Планировщик скачиваний (SPEC 8.2, 10.2) ----------------------------------------------
+
+// Скачиванием фейка управляет тест (manual): порядок исполнения и приоритеты детерминированы.
+// Ожидания — барьеры на наблюдаемые события (запрос дошёл до TDLib, читатель встал в очередь,
+// планировщик прошёл после постановки запроса), а не паузы.
+class SchedTest : public TelegramStoreTest {
+  protected:
+    static constexpr size_t kSize = 20'000;
+
+    struct Doc {
+        ChunkRef ref;
+        int32_t fid = 0;
+        std::string content;
+    };
+    struct Reader {
+        std::thread thread;
+        std::string out;
+        std::optional<StoreError> error;
+        Clock::time_point began;
+        Clock::time_point ended;
+        void join() {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    };
+
+    void SetUp() override {
+        TelegramStoreTest::SetUp();
+        fake->set_download_mode(FakeTelegram::DownloadMode::manual);
+        fake->set_part_size(1000);
+        auto o = default_options();
+        o.download_concurrency = 8;
+        o.read_timeout = seconds{20};
+        o.call_timeout = seconds{5};
+        make(o);
+    }
+    void TearDown() override {
+        // Зависшие читатели (тест упал на полпути) дорабатывают в автоматическом режиме.
+        fake->set_download_mode(FakeTelegram::DownloadMode::automatic);
+        for (auto& r : readers) {
+            r->join();
+        }
+        TelegramStoreTest::TearDown();
+    }
+
+    Doc add_doc(uint32_t seed, size_t size = kSize) {
+        Doc d;
+        d.content = pattern(size, seed);
+        const int64_t id = fake->seed_document(d.content);
+        d.ref = ChunkRef{id, fake->message(id)->remote_id};
+        d.fid = fake->message(id)->file_id;
+        return d;
+    }
+    Reader& start_read(const Doc& d, uint64_t off, size_t len) {
+        readers.push_back(std::make_unique<Reader>());
+        Reader& r = *readers.back();
+        r.out.assign(len, '\0');
+        r.began = Clock::now();
+        r.thread = std::thread([this, &r, ref = d.ref, off] {
+            r.error = error_of(
+                [&] { store->read_range(ref, off, std::as_writable_bytes(std::span{r.out})); });
+            r.ended = Clock::now();
+        });
+        return r;
+    }
+    bool wait_downloads(size_t n) {
+        return wait_for([&] { return fake->count("downloadFile") >= n; });
+    }
+    bool wait_waiting(uint64_t n) {
+        return wait_for([&] { return store->download_stats().waiting == n; });
+    }
+    // Планировщик прошёл хотя бы раз после последней постановки запроса.
+    bool settle() {
+        return store->wait_prefetch_idle(seconds{10}) &&
+               wait_for([&] { return store->download_stats().plans_since_event >= 1; });
+    }
+    Json download(size_t index) const { return fake->requests("downloadFile").at(index); }
+
+    std::vector<std::unique_ptr<Reader>> readers;
+};
+
+TEST_F(SchedTest, ReadyRangeIsReadWithoutDownloadFile) {
+    const Doc d = add_doc(1);
+    Reader& first = start_read(d, 0, 3000);
+    ASSERT_TRUE(wait_downloads(1));
+    fake->run_downloads();
+    first.join();
+    EXPECT_FALSE(first.error.has_value());
+    EXPECT_EQ(first.out, d.content.substr(0, 3000));
+
+    const size_t calls = fake->count("downloadFile");
+    const uint64_t hits = store->download_stats().prefix_hits;
+    Reader& again = start_read(d, 1000, 1000);
+    again.join();  // без шагов фейка: данные уже на диске
+    EXPECT_FALSE(again.error.has_value());
+    EXPECT_EQ(again.out, d.content.substr(1000, 1000));
+    EXPECT_EQ(fake->count("downloadFile"), calls);
+    EXPECT_EQ(store->download_stats().prefix_hits, hits + 1);
+}
+
+TEST_F(SchedTest, ReadInsideTheActiveWindowWaitsWithoutNewRequest) {
+    const Doc d = add_doc(2);
+    Reader& a = start_read(d, 0, 10'000);
+    ASSERT_TRUE(wait_downloads(1));
+    Reader& b = start_read(d, 2000, 1000);
+    ASSERT_TRUE(wait_waiting(2));
+    ASSERT_TRUE(settle());
+    EXPECT_EQ(fake->count("downloadFile"), 1U);
+    fake->run_downloads();
+    a.join();
+    b.join();
+    EXPECT_EQ(a.out, d.content.substr(0, 10'000));
+    EXPECT_EQ(b.out, d.content.substr(2000, 1000));
+    EXPECT_EQ(fake->count("downloadFile"), 1U);
+}
+
+TEST_F(SchedTest, UserReadDisplacesReadaheadAndCapturesTheRestOfTheWindow) {
+    const Doc d = add_doc(3);
+    store->prefetch(d.ref, 4000, 8000, 0);
+    ASSERT_TRUE(wait_downloads(1));
+    EXPECT_EQ(download(0)["offset"], 4000);
+    EXPECT_EQ(download(0)["limit"], 8000);
+    EXPECT_EQ(download(0)["priority"], 16);
+    fake->step(2);                          // готово [4000, 6000)
+    Reader& r = start_read(d, 3000, 1000);  // перед окном: не покрыт, вытесняет readahead
+    ASSERT_TRUE(wait_downloads(2));
+    EXPECT_EQ(download(1)["offset"], 3000);
+    EXPECT_EQ(download(1)["limit"], 9000);  // захвачен остаток [6000, 12000) за запросом
+    EXPECT_EQ(download(1)["priority"], 32);
+    fake->run_downloads();
+    r.join();
+    EXPECT_FALSE(r.error.has_value());
+    EXPECT_EQ(r.out, d.content.substr(3000, 1000));
+    EXPECT_EQ(store->download_stats().displaced, 1U);
+    EXPECT_EQ(fake->downloaded_bytes(d.fid), 9000 + 0);  // [3000, 12000)
+}
+
+TEST_F(SchedTest, AdjacentReadaheadExtendsTheActiveWindowAndOthersWait) {
+    const Doc d = add_doc(4);
+    store->prefetch(d.ref, 0, 4000, 0);
+    ASSERT_TRUE(wait_downloads(1));
+    store->prefetch(d.ref, 4000, 4000, 0);  // смежный: продлевает окно
+    ASSERT_TRUE(wait_downloads(2));
+    EXPECT_EQ(download(1)["offset"], 0);    // тот же offset
+    EXPECT_EQ(download(1)["limit"], 8000);  // больший limit
+    ASSERT_TRUE(fake->window(d.fid).has_value());
+    EXPECT_EQ(fake->window(d.fid)->limit, 8000);
+    EXPECT_EQ(store->download_stats().extended, 1U);
+
+    store->prefetch(d.ref, 12'000, 2000, 0);  // несмежный: встаёт в очередь файла
+    ASSERT_TRUE(settle());
+    EXPECT_EQ(fake->count("downloadFile"), 2U);
+    fake->run_downloads();  // окно [0, 8000) завершено, очередь свободна
+    ASSERT_TRUE(wait_downloads(3));
+    EXPECT_EQ(download(2)["offset"], 12'000);
+    EXPECT_EQ(download(2)["limit"], 2000);
+}
+
+TEST_F(SchedTest, WaitingReaderRaisesTheReadaheadPriority) {
+    const Doc d = add_doc(5);
+    store->prefetch(d.ref, 0, 8000, 0);
+    ASSERT_TRUE(wait_downloads(1));
+    EXPECT_EQ(download(0)["priority"], 16);
+    Reader& r = start_read(d, 1000, 1000);  // обслуживается окном readahead
+    ASSERT_TRUE(wait_downloads(2));
+    EXPECT_EQ(download(1)["offset"], 0);  // те же offset и limit, другой приоритет
+    EXPECT_EQ(download(1)["limit"], 8000);
+    EXPECT_EQ(download(1)["priority"], 32);
+    EXPECT_GE(store->download_stats().reprioritized, 1U);
+    fake->run_downloads();
+    r.join();
+    EXPECT_EQ(r.out, d.content.substr(1000, 1000));
+}
+
+TEST_F(SchedTest, ReadaheadPriorityFollowsTheDistance) {
+    const std::vector<uint32_t> distances{0, 1, 3, 40};
+    const std::vector<int> expected{16, 15, 13, 1};
+    std::vector<Doc> docs;
+    for (size_t i = 0; i < distances.size(); ++i) {
+        docs.push_back(add_doc(10 + static_cast<uint32_t>(i)));
+        store->prefetch(docs.back().ref, 0, 4000, distances[i]);
+    }
+    ASSERT_TRUE(wait_downloads(distances.size()));
+    for (size_t i = 0; i < docs.size(); ++i) {
+        ASSERT_TRUE(fake->window(docs[i].fid).has_value());
+        EXPECT_EQ(fake->window(docs[i].fid)->priority, expected[i]) << "distance " << distances[i];
+    }
+}
+
+TEST_F(SchedTest, ReadaheadTakesAtMostHalfOfTheSlots) {
+    auto o = default_options();
+    o.download_concurrency = 4;
+    o.read_timeout = seconds{20};
+    store.reset();
+    auto& s = make(o);
+    std::vector<Doc> docs;
+    for (uint32_t i = 0; i < 4; ++i) {
+        docs.push_back(add_doc(20 + i));
+        s.prefetch(docs.back().ref, 0, 4000, i);
+    }
+    ASSERT_TRUE(wait_downloads(2));
+    ASSERT_TRUE(settle());
+    EXPECT_EQ(fake->count("downloadFile"), 2U);  // половина от 4
+    // Пользовательское чтение занимает свободный слот.
+    Reader& r = start_read(docs[3], 0, 500);
+    ASSERT_TRUE(wait_downloads(3));
+    fake->run_downloads();
+    r.join();
+    EXPECT_EQ(r.out, docs[3].content.substr(0, 500));
+}
+
+TEST_F(SchedTest, UserPriorityFollowsAgeAcrossFilesAndIsRecomputedOnCompletion) {
+    const Doc a = add_doc(30);
+    const Doc b = add_doc(31);
+    const Doc c = add_doc(32);
+    Reader& ra = start_read(a, 0, 3000);
+    ASSERT_TRUE(wait_downloads(1));
+    Reader& rb = start_read(b, 0, 3000);
+    ASSERT_TRUE(wait_downloads(2));
+    Reader& rc = start_read(c, 0, 3000);
+    ASSERT_TRUE(wait_downloads(3));
+    EXPECT_EQ(fake->window(a.fid)->priority, 32);
+    EXPECT_EQ(fake->window(b.fid)->priority, 31);
+    EXPECT_EQ(fake->window(c.fid)->priority, 30);
+
+    while (fake->completion_order().empty()) {  // TDLib берёт старший приоритет: файл a
+        ASSERT_GT(fake->step(), 0);
+    }
+    EXPECT_EQ(fake->completion_order().front(), a.fid);
+    ra.join();
+    // Приоритеты оставшихся пересчитаны повторным вызовом с теми же offset и limit.
+    ASSERT_TRUE(wait_for([&] {
+        const auto wb = fake->window(b.fid);
+        const auto wc = fake->window(c.fid);
+        return wb && wc && wb->priority == 32 && wc->priority == 31;
+    }));
+    const auto recalculated = fake->requests("downloadFile").back();
+    EXPECT_EQ(recalculated["limit"], 3000);
+    EXPECT_EQ(recalculated["offset"], 0);
+    fake->run_downloads();
+    rb.join();
+    rc.join();
+    EXPECT_EQ(fake->completion_order(), (std::vector<int32_t>{a.fid, b.fid, c.fid}));
+    EXPECT_EQ(rb.out, b.content.substr(0, 3000));
+    EXPECT_EQ(rc.out, c.content.substr(0, 3000));
+}
+
+TEST_F(SchedTest, UserReadsOfOneFileAreServedOldestFirst) {
+    const Doc d = add_doc(40);
+    Reader& first = start_read(d, 0, 1000);
+    ASSERT_TRUE(wait_downloads(1));
+    Reader& second = start_read(d, 10'000, 1000);  // другое место: ждёт очереди файла
+    ASSERT_TRUE(wait_waiting(2));
+    ASSERT_TRUE(settle());
+    EXPECT_EQ(fake->count("downloadFile"), 1U);  // старый запрос не вытеснен
+    fake->run_downloads();
+    first.join();
+    ASSERT_TRUE(wait_downloads(2));
+    EXPECT_EQ(download(1)["offset"], 10'000);
+    fake->run_downloads();
+    second.join();
+    EXPECT_EQ(first.out, d.content.substr(0, 1000));
+    EXPECT_EQ(second.out, d.content.substr(10'000, 1000));
+}
+
+// local.path меняется при завершении файла: апдейт с прогрессом ещё несёт старый путь, а по нему
+// файла уже нет. Чтение берёт путь заново (getFile) и не качает ничего повторно.
+TEST_F(SchedTest, PathChangeOnCompletionIsNotAnError) {
+    const Doc d = add_doc(50, 3000);
+    fake->hold_final_update(true);
+    Reader& r = start_read(d, 0, 3000);
+    ASSERT_TRUE(wait_downloads(1));
+    fake->run_downloads();
+    r.join();
+    EXPECT_FALSE(r.error.has_value());
+    EXPECT_EQ(r.out, d.content);
+    EXPECT_GE(fake->count("getFile"), 1U);
+    EXPECT_EQ(fake->count("downloadFile"), 1U);
+    fake->release_held_updates();
+}
+
+TEST_F(SchedTest, DisplacingOwnWindowIsNotAnError) {
+    const Doc d = add_doc(60);
+    store->prefetch(d.ref, 0, 8000, 0);
+    ASSERT_TRUE(wait_downloads(1));
+    fake->step(1);
+    Reader& r = start_read(d, 9000, 1000);  // вне окна: вытесняет его
+    ASSERT_TRUE(wait_downloads(2));
+    fake->run_downloads();
+    r.join();
+    EXPECT_FALSE(r.error.has_value());
+    EXPECT_EQ(r.out, d.content.substr(9000, 1000));
+    EXPECT_EQ(fake->count("getMessages"), 0U);  // повторов с новым file_id не было
+}
+
+// read_timeout отсчитывается от постановки запроса, а не от его очереди в TDLib: второй читатель
+// не получает новый срок, когда доходит до головы очереди файла.
+TEST_F(SchedTest, ReadTimeoutCountsFromTheMomentOfQueueing) {
+    auto o = default_options();
+    o.download_concurrency = 8;
+    o.read_timeout = milliseconds{600};
+    o.call_timeout = seconds{5};
+    store.reset();
+    make(o);
+    const Doc d = add_doc(70);
+    Reader& first = start_read(d, 0, 1000);  // окно открыто, но TDLib не качает
+    ASSERT_TRUE(wait_downloads(1));
+    std::this_thread::sleep_for(milliseconds{300});
+    Reader& second = start_read(d, 10'000, 1000);
+    first.join();
+    second.join();
+    ASSERT_TRUE(first.error.has_value());
+    ASSERT_TRUE(second.error.has_value());
+    EXPECT_EQ(first.error->kind(), StoreErrorKind::transient);
+    EXPECT_EQ(second.error->kind(), StoreErrorKind::transient);
+    const auto first_took = first.ended - first.began;
+    const auto second_took = second.ended - second.began;
+    EXPECT_GE(first_took, milliseconds{600});
+    EXPECT_GE(second_took, milliseconds{550});
+    EXPECT_LT(second_took, milliseconds{800});  // со свежим сроком было бы около 900 мс
+}
+
+TEST_F(SchedTest, StalledDownloadIsRepeatedWithTheSameCall) {
+    auto o = default_options();
+    o.download_concurrency = 8;
+    o.read_timeout = seconds{20};
+    o.download_stall = milliseconds{100};
+    store.reset();
+    make(o);
+    const Doc d = add_doc(80);
+    Reader& r = start_read(d, 0, 2000);
+    ASSERT_TRUE(wait_downloads(1));
+    ASSERT_TRUE(wait_downloads(2));  // без прогресса вызов повторён тем же offset и limit
+    EXPECT_EQ(download(1)["offset"], download(0)["offset"]);
+    EXPECT_EQ(download(1)["limit"], download(0)["limit"]);
+    fake->run_downloads();
+    r.join();
+    EXPECT_EQ(r.out, d.content.substr(0, 2000));
+    EXPECT_GE(store->download_stats().stalls, 1U);
+}
+
+// ---- Кэш чтения (SPEC 8.2) ------------------------------------------------------------------
+
+class CacheTest : public TelegramStoreTest {
+  protected:
+    void SetUp() override {
+        TelegramStoreTest::SetUp();
+        // Размер кэшированного файла на диске по st_blocks: файл в 5000 байт.
+        const fs::path probe = dir / "probe";
+        std::ofstream(probe, std::ios::binary) << pattern(kSize, 1);
+        struct stat st {};
+        ASSERT_EQ(::stat(probe.c_str(), &st), 0);
+        file_bytes = static_cast<uint64_t>(st.st_blocks) * 512;
+        fs::remove(probe);
+        state_db = dir / "state.sqlite";
+        meta::Db::open(state_db, meta::OpenOptions{.create = true}).exec("SELECT 1");
+    }
+
+    TelegramStore& make_cached(uint64_t limit) {
+        auto o = default_options();
+        o.state_db = state_db;
+        o.tdfiles_dir = dir / "dl";
+        o.cache_limit = limit;
+        return make(o);
+    }
+    struct Doc {
+        ChunkRef ref;
+        int32_t fid = 0;
+        std::string content;
+    };
+    Doc add_doc(uint32_t seed, size_t size = kSize) {
+        Doc d;
+        d.content = pattern(size, seed);
+        const int64_t id = fake->seed_document(d.content);
+        d.ref = ChunkRef{id, fake->message(id)->remote_id};
+        d.fid = fake->message(id)->file_id;
+        return d;
+    }
+    std::string read_all(const Doc& d) {
+        std::string out(d.content.size(), '\0');
+        store->read_range(d.ref, 0, std::as_writable_bytes(std::span{out}));
+        return out;
+    }
+    [[nodiscard]] bool on_disk(const Doc& d) const {
+        const std::string p = fake->local_path(d.fid);
+        return !p.empty() && fs::exists(p);
+    }
+
+    static constexpr size_t kSize = 5000;
+    uint64_t file_bytes = 0;
+    fs::path state_db;
+};
+
+TEST_F(CacheTest, EvictsLeastRecentlyUsedFilesDownTo90PercentOfTheLimit) {
+    auto& s = make_cached(file_bytes * 7 / 2);  // 3,5 файла
+    std::vector<Doc> docs;
+    for (uint32_t i = 0; i < 5; ++i) {
+        docs.push_back(add_doc(100 + i));
+        EXPECT_EQ(read_all(docs.back()), docs.back().content);
+    }
+    ASSERT_NE(s.read_cache(), nullptr);
+    EXPECT_EQ(s.read_cache()->total_bytes(), 5 * file_bytes);
+    s.maintain_read_cache();
+    // Цель: не больше 90 % лимита (3,15 файла): остаются три самых свежих файла.
+    EXPECT_EQ(s.read_cache()->total_bytes(), 3 * file_bytes);
+    EXPECT_FALSE(on_disk(docs[0]));
+    EXPECT_FALSE(on_disk(docs[1]));
+    EXPECT_TRUE(on_disk(docs[2]));
+    EXPECT_TRUE(on_disk(docs[3]));
+    EXPECT_TRUE(on_disk(docs[4]));
+    EXPECT_EQ(fake->count("deleteFile"), 2U);  // через TDLib: getRemoteFile и deleteFile
+    // Вытесненный файл читается заново и верно.
+    EXPECT_EQ(read_all(docs[0]), docs[0].content);
+    EXPECT_EQ(fake->count("downloadFile"), 6U);
+}
+
+TEST_F(CacheTest, FileWithActiveDownloadIsNotEvicted) {
+    fake->set_part_size(1000);
+    auto& s = make_cached(file_bytes / 2);  // всё сверх половины файла лишнее
+    const Doc quiet = add_doc(110);
+    EXPECT_EQ(read_all(quiet), quiet.content);
+    const Doc busy = add_doc(111, 20'000);
+    std::string head(1000, '\0');
+    s.read_range(busy.ref, 0, std::as_writable_bytes(std::span{head}));  // файл учтён
+    fake->set_download_mode(FakeTelegram::DownloadMode::manual);
+    std::string tail(1000, '\0');
+    std::thread reader(
+        [&] { s.read_range(busy.ref, 15'000, std::as_writable_bytes(std::span{tail})); });
+    ASSERT_TRUE(wait_for([&] { return fake->window(busy.fid).has_value(); }));
+    s.maintain_read_cache();
+    EXPECT_FALSE(on_disk(quiet));
+    EXPECT_TRUE(on_disk(busy));  // его окно активно
+    fake->run_downloads();
+    reader.join();
+    EXPECT_EQ(tail, busy.content.substr(15'000, 1000));
+}
+
+TEST_F(CacheTest, FileDeletedBehindTdlibIsDownloadedAgainAndAccountedOnce) {
+    auto& s = make_cached(file_bytes * 100);
+    const Doc d = add_doc(120);
+    EXPECT_EQ(read_all(d), d.content);
+    fake->remove_local_file(d.fid);  // за спиной TDLib: getFile ещё считает его скачанным
+    EXPECT_EQ(read_all(d), d.content);
+    EXPECT_EQ(fake->count("downloadFile"), 2U);
+    EXPECT_EQ(s.read_cache()->entries().size(), 1U);
+    EXPECT_EQ(s.read_cache()->total_bytes(), file_bytes);
+}
+
+// Ошибка при удалении жертвы (любого типа, не только TdException) не оставляет файлы навсегда
+// помеченными как вытесняемые: читатели не ждут до таймаута.
+TEST_F(CacheTest, FailureDuringEvictionReleasesTheClaims) {
+    auto o = default_options();
+    o.state_db = state_db;
+    o.tdfiles_dir = dir / "dl";
+    o.cache_limit = file_bytes * 7 / 2;
+    o.eviction_test_hook = [](const std::string&) { throw std::runtime_error("injected"); };
+    auto& s = make(o);
+    std::vector<Doc> docs;
+    for (uint32_t i = 0; i < 5; ++i) {
+        docs.push_back(add_doc(140 + i));
+        EXPECT_EQ(read_all(docs.back()), docs.back().content);
+    }
+    EXPECT_THROW(s.maintain_read_cache(), std::runtime_error);
+    for (const Doc& d : docs) {
+        const auto began = Clock::now();
+        EXPECT_EQ(read_all(d), d.content);  // без снятия пометки ждало бы read_timeout и упало
+        EXPECT_LT(Clock::now() - began, milliseconds{1000});
+    }
+}
+
+// Файл, отправленный этим процессом, лежит вне tdfiles (временная ссылка): учёт кэша его не ведёт и
+// вытеснение его не трогает; после докачки в tdfiles учитывается уже скачанная копия.
+TEST_F(CacheTest, FilesSentByThisProcessAreNotAccountedOutsideTdfiles) {
+    auto& s = make_cached(file_bytes * 100);
+    const ChunkRef ref = s.put_chunk(write_file("own-chunk", pattern(kSize, 160)));
+    std::string out(kSize, '\0');
+    s.read_range(ref, 0, std::as_writable_bytes(std::span{out}));
+    EXPECT_EQ(out, pattern(kSize, 160));
+    s.maintain_read_cache();
+    ASSERT_NE(s.read_cache(), nullptr);
+    for (const ReadCacheEntry& e : s.read_cache()->entries()) {
+        EXPECT_TRUE(e.path.starts_with((dir / "dl").string())) << e.path;
+    }
+    EXPECT_EQ(s.read_cache()->entries().size(), 1U);
+    EXPECT_EQ(fake->count("deleteFile"), 0U);
+}
+
+TEST_F(CacheTest, AccountingIsSavedToTheStateTableAndSurvivesRestart) {
+    {
+        auto& s = make_cached(file_bytes * 100);
+        for (uint32_t i = 0; i < 3; ++i) {
+            const Doc d = add_doc(130 + i);
+            EXPECT_EQ(read_all(d), d.content);
+        }
+        s.maintain_read_cache();  // сброс в таблицу
+    }
+    store.reset();
+    auto& again = make_cached(file_bytes * 100);
+    again.start_read_cache();  // сверка при монтировании
+    ASSERT_NE(again.read_cache(), nullptr);
+    EXPECT_EQ(again.read_cache()->entries().size(), 3U);
+    EXPECT_EQ(again.read_cache()->total_bytes(), 3 * file_bytes);
+    for (const ReadCacheEntry& e : again.read_cache()->entries()) {
+        EXPECT_FALSE(e.remote_file_id.empty());  // remote_file_id пережил перезапуск
+    }
+}
+
+// В --ro (SPEC 7.2) state_db не передаётся: учёт кэша идёт в памяти, вытеснение работает, а
+// state.sqlite не меняется ни байтом (ни CREATE TABLE, ни сброса учёта, ни WAL).
+TEST_F(CacheTest, WithoutStateDbTheAccountingStaysInMemoryAndStateSqliteIsUntouched) {
+    const auto snapshot = [&] {
+        std::ifstream in(state_db, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    };
+    const std::string before = snapshot();
+    ASSERT_FALSE(before.empty());
+    auto o = default_options();
+    o.tdfiles_dir = dir / "dl";  // state_db не задан
+    o.cache_limit = file_bytes * 7 / 2;
+    auto& s = make(o);
+    std::vector<Doc> docs;
+    for (uint32_t i = 0; i < 5; ++i) {
+        docs.push_back(add_doc(150 + i));
+        EXPECT_EQ(read_all(docs.back()), docs.back().content);
+    }
+    s.start_read_cache();     // сверка с каталогом
+    s.maintain_read_cache();  // вытеснение и «сброс»
+    ASSERT_NE(s.read_cache(), nullptr);
+    EXPECT_EQ(s.read_cache()->total_bytes(), 3 * file_bytes);  // вытеснение работает
+    EXPECT_FALSE(on_disk(docs[0]));
+    store.reset();  // деструктор ReadCache тоже сбрасывает учёт
+    EXPECT_EQ(snapshot(), before);
+    EXPECT_FALSE(fs::exists(state_db.string() + "-wal"));
+    EXPECT_FALSE(fs::exists(state_db.string() + "-shm"));
+}
+
+TEST_F(CacheTest, WithoutPathsThereIsNoAccounting) {
+    auto& s = make();
+    s.start_read_cache();
+    s.maintain_read_cache();
+    EXPECT_EQ(s.read_cache(), nullptr);
+}
+
+// ---- DownloadScheduler напрямую (SPEC 8.2): вытеснение, апдейты, readahead ----------------------
+
+class DirectSchedTest : public TelegramStoreTest {
+  protected:
+    static constexpr size_t kSize = 20'000;
+    static constexpr int32_t kAlias = 5000;
+
+    struct Doc {
+        int32_t fid = 0;
+        std::string content;
+        [[nodiscard]] FileRef ref() const { return FileRef{fid, kSize, {}}; }
+    };
+
+    void SetUp() override {
+        TelegramStoreTest::SetUp();
+        fake->set_part_size(1000);
+    }
+    void TearDown() override {
+        fake->set_download_mode(FakeTelegram::DownloadMode::automatic);
+        for (auto& t : threads) {
+            t.join();
+        }
+        TelegramStoreTest::TearDown();
+    }
+
+    static SchedulerOptions options() {
+        SchedulerOptions o;
+        o.call_timeout = seconds{5};
+        o.failure_guard = milliseconds{30};
+        return o;
+    }
+    std::unique_ptr<DownloadScheduler> make_sched(const SchedulerOptions& o = options()) {
+        return std::make_unique<DownloadScheduler>(*client, o, SchedulerHooks{});
+    }
+    Doc add_doc(uint32_t seed) {
+        Doc d;
+        d.content = pattern(kSize, seed);
+        const int64_t id = fake->seed_document(d.content);
+        d.fid = fake->message(id)->file_id;
+        return d;
+    }
+    static Clock::time_point in(milliseconds d) { return Clock::now() + d; }
+    static std::string read(DownloadScheduler& sched, const FileRef& f, uint64_t off, size_t len,
+                            Clock::time_point deadline) {
+        std::string out(len, '\0');
+        sched.read(f, off, std::as_writable_bytes(std::span{out}), ReadKind::user, deadline);
+        return out;
+    }
+    // Чтение, которое должно упереться в дедлайн (transient StoreError).
+    static bool times_out(DownloadScheduler& sched, const FileRef& f, uint64_t off, size_t len) {
+        try {
+            (void)read(sched, f, off, len, in(milliseconds{300}));
+        } catch (const StoreError& e) {
+            return e.kind() == StoreErrorKind::transient;
+        }
+        return false;
+    }
+
+    std::vector<std::thread> threads;
+};
+
+// Один путь известен планировщику под двумя file_id (после getMessages): вытеснение помечает оба,
+// чтение под любым из них ждёт его конца.
+TEST_F(DirectSchedTest, EvictionBarrierCoversEveryFileIdKnownUnderThePath) {
+    const Doc d = add_doc(1);
+    fake->add_alias(kAlias, d.fid);
+    auto sched = make_sched();
+    const FileRef alias{kAlias, kSize, {}};
+    EXPECT_EQ(read(*sched, d.ref(), 0, 1000, in(seconds{10})), d.content.substr(0, 1000));
+    EXPECT_EQ(read(*sched, alias, 0, 1000, in(seconds{10})), d.content.substr(0, 1000));
+    const std::string path = fake->local_path(d.fid);
+    ASSERT_FALSE(path.empty());
+    ASSERT_TRUE(sched->begin_evict(path));
+    EXPECT_TRUE(times_out(*sched, alias, 0, 1000));  // второй file_id тоже помечен
+    EXPECT_TRUE(times_out(*sched, d.ref(), 0, 1000));
+    sched->end_evict(path, false);
+    EXPECT_EQ(read(*sched, alias, 0, 1000, in(seconds{10})), d.content.substr(0, 1000));
+    EXPECT_EQ(read(*sched, d.ref(), 0, 1000, in(seconds{10})), d.content.substr(0, 1000));
+}
+
+// Занят любой из file_id пути: вытеснение отказывает, даже если первый из них свободен.
+TEST_F(DirectSchedTest, EvictionIsRefusedWhileAnotherFileIdOfThePathIsBusy) {
+    const Doc d = add_doc(2);
+    fake->add_alias(kAlias, d.fid);
+    auto sched = make_sched();
+    fake->set_download_mode(FakeTelegram::DownloadMode::manual);
+    threads.emplace_back([&] { (void)read(*sched, d.ref(), 0, 1000, in(seconds{10})); });
+    ASSERT_TRUE(wait_for([&] { return fake->window(d.fid).has_value(); }));
+    fake->run_downloads();
+    ASSERT_TRUE(wait_for([&] { return !fake->local_path(d.fid).empty(); }));
+    const std::string path = fake->local_path(d.fid);
+    threads.back().join();
+    threads.pop_back();
+    // Под вторым file_id идёт скачивание того же файла.
+    threads.emplace_back(
+        [&] { (void)read(*sched, FileRef{kAlias, kSize, {}}, 10'000, 1000, in(seconds{10})); });
+    ASSERT_TRUE(wait_for([&] { return sched->stats().waiting == 1; }));
+    // Путь второй состояние получает с ответом на downloadFile: опрашиваем, пока отказ не придёт.
+    bool refused = false;
+    const auto until = in(seconds{2});
+    while (Clock::now() < until && !refused) {
+        if (sched->begin_evict(path)) {
+            sched->end_evict(path, false);
+            std::this_thread::sleep_for(milliseconds{2});
+        } else {
+            refused = true;
+        }
+    }
+    EXPECT_TRUE(refused);
+    fake->run_downloads();
+    threads.back().join();
+    threads.pop_back();
+}
+
+// Файл, которого планировщик не знал при begin_evict, получает барьер, когда узнаёт вытесняемый
+// путь: pread не читает файл, который сейчас удаляют.
+TEST_F(DirectSchedTest, FileUnknownToTheSchedulerWaitsForTheEvictionOfItsPath) {
+    const Doc d = add_doc(3);
+    std::string path;
+    {
+        auto first = make_sched();
+        EXPECT_EQ(read(*first, d.ref(), 0, 1000, in(seconds{10})), d.content.substr(0, 1000));
+        path = fake->local_path(d.fid);
+    }
+    auto sched = make_sched();  // не знает файл
+    ASSERT_TRUE(sched->begin_evict(path));
+    EXPECT_TRUE(times_out(*sched, d.ref(), 0, 1000));
+    std::string got;
+    std::atomic<bool> finished{false};
+    threads.emplace_back([&] {
+        got = read(*sched, d.ref(), 0, 1000, in(seconds{10}));
+        finished = true;
+    });
+    // Читатель стоит у барьера: вытеснение ещё не кончилось, данные он не получил.
+    std::this_thread::sleep_for(milliseconds{100});
+    EXPECT_FALSE(finished.load());
+    sched->end_evict(path, false);
+    threads.back().join();
+    threads.pop_back();
+    EXPECT_EQ(got, d.content.substr(0, 1000));
+}
+
+// Читатель, ждавший конца вытеснения, держит ссылку на состояние файла: уборка простаивающих файлов
+// (idle_forget) не стирает его, пока читатель не проснулся. Без счётчика читателей до ожидания
+// ссылка повисала (ловится ASan, на обычной сборке исход случаен).
+TEST_F(DirectSchedTest, ReaderWaitingForEvictionKeepsTheFileState) {
+    const Doc d = add_doc(7);
+    auto o = options();
+    o.idle_forget = milliseconds{10};
+    auto sched = make_sched(o);
+    EXPECT_EQ(read(*sched, d.ref(), 0, 1000, in(seconds{10})), d.content.substr(0, 1000));
+    const std::string path = fake->local_path(d.fid);
+    for (int round = 0; round < 15; ++round) {
+        if (sched->tracked_files() == 0) {
+            // Состояние забыто простоем: читатель заводит его заново и снова получает путь.
+            EXPECT_EQ(read(*sched, d.ref(), 0, 1000, in(seconds{10})), d.content.substr(0, 1000));
+        }
+        // Окно скачивания закрывается проходом планировщика уже после ответа читателю.
+        ASSERT_TRUE(wait_for([&] { return sched->stats().active_now == 0; }));
+        ASSERT_TRUE(sched->begin_evict(path));
+        std::string got;
+        std::thread reader([&] { got = read(*sched, d.ref(), 0, 1000, in(seconds{10})); });
+        std::this_thread::sleep_for(milliseconds{30});  // втрое дольше idle_forget
+        sched->end_evict(path, false);
+        reader.join();
+        EXPECT_EQ(got, d.content.substr(0, 1000));
+    }
+}
+
+// Запоздалый апдейт «не качается» о прежнем окне (другой download_offset) не обрывает новое.
+TEST_F(DirectSchedTest, LateInactiveUpdateOfThePreviousWindowIsNotAnAbort) {
+    const Doc d = add_doc(4);
+    auto sched = make_sched();
+    fake->set_download_mode(FakeTelegram::DownloadMode::manual);
+    std::string got;
+    std::optional<StoreError> error;
+    threads.emplace_back([&] {
+        error = error_of([&] { got = read(*sched, d.ref(), 10'000, 1000, in(seconds{10})); });
+    });
+    ASSERT_TRUE(wait_for([&] { return fake->window(d.fid).has_value(); }));
+    ASSERT_TRUE(wait_for([&] { return !fake->local_path(d.fid).empty(); }));
+    // Прежнее окно (offset 0) сообщает «не качается», когда уже идёт окно с offset 10000.
+    Json local{{"path", fake->local_path(d.fid)},
+               {"is_downloading_active", false},
+               {"is_downloading_completed", false},
+               {"download_offset", 0},
+               {"downloaded_prefix_size", 0}};
+    fake->push_update(
+        Json{{"@type", "updateFile"},
+             {"file", {{"id", d.fid}, {"size", kSize}, {"local", std::move(local)}}}});
+    std::this_thread::sleep_for(milliseconds{300});  // в десять раз больше failure_guard
+    EXPECT_EQ(fake->count("downloadFile"), 1U);
+    fake->run_downloads();
+    threads.back().join();
+    threads.pop_back();
+    EXPECT_FALSE(error.has_value());
+    EXPECT_EQ(got, d.content.substr(10'000, 1000));
+}
+
+// Скачивание после сброса локального расположения (файл отправлен этим процессом): TDLib сначала
+// шлёт «не качается», потом «качается», а первая часть приходит дольше failure_guard. Это не
+// обрыв: окно не отменяется и читатель получает данные тем же downloadFile.
+TEST_F(DirectSchedTest, SlowFirstPartAfterLocalCheckIsNotAnAbort) {
+    const Doc d = add_doc(8);
+    fake->set_stale_local(d.fid);
+    auto sched = make_sched();
+    fake->set_download_mode(FakeTelegram::DownloadMode::manual);
+    std::string got;
+    std::optional<StoreError> error;
+    threads.emplace_back(
+        [&] { error = error_of([&] { got = read(*sched, d.ref(), 0, 1000, in(seconds{10})); }); });
+    ASSERT_TRUE(wait_for([&] { return fake->window(d.fid).has_value(); }));
+    std::this_thread::sleep_for(milliseconds{300});  // в десять раз дольше failure_guard
+    EXPECT_EQ(fake->count("downloadFile"), 1U);
+    fake->run_downloads();
+    threads.back().join();
+    threads.pop_back();
+    EXPECT_FALSE(error.has_value());
+    EXPECT_EQ(got, d.content.substr(0, 1000));
+}
+
+// Начало диапазона ждущего уже скачано (дошёл readahead), окно начинается с первого непокрытого
+// байта. Такое окно обслуживает ждущего: планировщик не выдаёт тот же downloadFile на каждом
+// проходе (в живом прогоне это были тысячи вызовов в секунду, они отменяли друг друга, и чтение
+// вставало).
+TEST_F(DirectSchedTest, WindowStartedAtTheFirstGapServesTheWaiterWithoutRepeatedCalls) {
+    const Doc d = add_doc(10);
+    auto sched = make_sched();
+    fake->set_download_mode(FakeTelegram::DownloadMode::manual);
+    threads.emplace_back([&] { (void)read(*sched, d.ref(), 0, 1000, in(seconds{10})); });
+    ASSERT_TRUE(wait_for([&] { return fake->window(d.fid).has_value(); }));
+    fake->run_downloads();
+    threads.back().join();
+    threads.pop_back();
+    ASSERT_TRUE(wait_for([&] { return sched->stats().active_now == 0; }));
+    const size_t before = fake->count("downloadFile");
+    std::string got;
+    threads.emplace_back([&] { got = read(*sched, d.ref(), 500, 3000, in(seconds{10})); });
+    ASSERT_TRUE(wait_for([&] { return fake->count("downloadFile") > before; }));
+    EXPECT_EQ(fake->window(d.fid)->offset, 1000);  // с первого непокрытого байта
+    std::this_thread::sleep_for(milliseconds{300});
+    EXPECT_LE(fake->count("downloadFile"), before + 2) << "downloadFile is repeated on every pass";
+    EXPECT_LE(sched->stats().calls, uint64_t{before + 2});
+    fake->run_downloads();
+    threads.back().join();
+    threads.pop_back();
+    EXPECT_EQ(got, d.content.substr(500, 3000));
+}
+
+// Диагностика (SPEC 8.2): состояние файла в планировщике показывает окно, ждущих и последние
+// апдейты; то же уходит в лог (warning) при таймауте ожидания окна.
+TEST_F(DirectSchedTest, DescribeShowsTheWindowWaitersAndLastUpdates) {
+    const Doc d = add_doc(9);
+    auto sched = make_sched();
+    fake->set_download_mode(FakeTelegram::DownloadMode::manual);
+    EXPECT_TRUE(times_out(*sched, d.ref(), 2000, 1000));  // окно открыто, TDLib не качает
+    const std::string text = sched->describe(d.fid);
+    EXPECT_NE(text.find("active window [2000, +1000)"), std::string::npos) << text;
+    EXPECT_NE(text.find("prio 32"), std::string::npos) << text;
+    EXPECT_NE(text.find("ready {}"), std::string::npos) << text;
+    EXPECT_NE(text.find("last updates:"), std::string::npos) << text;
+    EXPECT_NE(text.find("reply offset 2000"), std::string::npos) << text;
+    EXPECT_NE(sched->describe(424242).find("unknown"), std::string::npos);
+}
+
+// Срок readahead считается от каждого запроса, а не от последней подсказки файла: запрос, который
+// не стартовал за readahead_ttl, забывается, даже если рядом поставили новый.
+TEST_F(DirectSchedTest, ReadaheadTtlCountsFromEachRequest) {
+    const Doc busy = add_doc(5);
+    const Doc waiting = add_doc(6);
+    auto o = options();
+    o.download_concurrency = 1;
+    o.readahead_ttl = milliseconds{1000};
+    auto sched = make_sched(o);
+    fake->set_download_mode(FakeTelegram::DownloadMode::manual);
+    sched->prefetch(busy.ref(), 0, 1000, 0);  // занимает единственный слот
+    ASSERT_TRUE(wait_for([&] { return fake->window(busy.fid).has_value(); }));
+    const auto t0 = Clock::now();
+    sched->prefetch(waiting.ref(), 0, 1000, 0);  // ждёт слот
+    std::this_thread::sleep_until(t0 + milliseconds{600});
+    sched->prefetch(waiting.ref(), 5000, 1000, 0);  // новая подсказка того же файла
+    std::this_thread::sleep_until(t0 + milliseconds{1250});  // первая подсказка просрочена
+    fake->run_downloads();                                   // слот освободился
+    ASSERT_TRUE(wait_for([&] { return fake->window(waiting.fid).has_value(); }));
+    EXPECT_EQ(fake->window(waiting.fid)->offset, 5000);
+    fake->run_downloads();
 }
 
 // NOLINTEND(bugprone-unchecked-optional-access)

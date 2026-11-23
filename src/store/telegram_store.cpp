@@ -25,6 +25,8 @@
 #include <vector>
 
 #include "common/files.h"
+#include "store/download_scheduler.h"
+#include "store/read_cache.h"
 #include "td/send_tracker.h"
 #include "td/td_client.h"
 #include "td/td_error.h"
@@ -47,7 +49,6 @@ constexpr size_t kDeleteBatch = 100;
 constexpr size_t kInfoCacheMax = 65'536;
 constexpr size_t kKnownIdsMax = 1U << 20;
 constexpr seconds kDefaultRetryAfter{60};  // 429 без retry_after
-constexpr int kDownloadPriority = 16;
 // Всего попыток скачивания одного диапазона: повторы после отмены и исчезнувшего локального файла
 // (SPEC 10.2).
 constexpr int kMaxDownloadRounds = 5;
@@ -115,20 +116,9 @@ StoreError store_error(const TdException& e, std::string_view what) {
     throw StoreError(kind, "TelegramStore: " + what);
 }
 
-// Повторяемые сбои скачивания: чтение повторяет их с обновлением file_id (SPEC 8.2, 10.2).
-// Отмена downloadFile: transient, повторяется до дедлайна вызова.
-class DownloadCanceled : public StoreError {
-  public:
-    using StoreError::StoreError;
-};
-// TDLib считает файл скачанным, а локального файла нет (чанк отправил этот же процесс, и ссылку,
-// с которой он уходил, уже убрали). Обычно TDLib сам замечает это перед downloadFile
-// (FileManager::check_local_location) и качает с сервера; если не заметил, достаточно повторить
-// downloadFile. deleteFile тут не помогает: для пути вне files_directory он ничего не делает.
-class LocalFileGone : public StoreError {
-  public:
-    using StoreError::StoreError;
-};
+// Повторяемые сбои скачивания (DownloadCanceled, LocalFileGone) объявлены в download_scheduler.h:
+// чтение повторяет их с обновлением file_id (SPEC 8.2, 10.2).
+//
 // Повтор не поможет, хотя ошибка не permanent по виду TDLib (проверка диапазона до скачивания).
 class NoRetryError : public StoreError {
   public:
@@ -286,14 +276,6 @@ fs::path make_named_link(const fs::path& source, const char* extension) {
 class SlotGuard {
   public:
     explicit SlotGuard(std::counting_semaphore<>& sem) : sem_(&sem) { sem_->acquire(); }
-    SlotGuard(std::counting_semaphore<>& sem, Clock::time_point deadline, const char* what)
-        : sem_(&sem) {
-        if (!sem_->try_acquire_until(deadline)) {
-            sem_ = nullptr;
-            throw_store(StoreErrorKind::transient,
-                        std::string{what} + ": timed out waiting for a free slot");
-        }
-    }
     SlotGuard(const SlotGuard&) = delete;
     SlotGuard& operator=(const SlotGuard&) = delete;
     ~SlotGuard() {
@@ -304,36 +286,6 @@ class SlotGuard {
 
   private:
     std::counting_semaphore<>* sem_;
-};
-
-// Монополия на скачивание одного файла (см. Impl::files_busy). Ждёт не дольше deadline.
-class FileGuard {
-  public:
-    FileGuard(std::mutex& mu, std::condition_variable& cv, std::unordered_set<int32_t>& busy,
-              int32_t id, Clock::time_point deadline, const char* what)
-        : mu_(mu), cv_(cv), busy_(busy), id_(id) {
-        std::unique_lock<std::mutex> lock(mu_);
-        if (!cv_.wait_until(lock, deadline, [&] { return !busy_.contains(id_); })) {
-            throw_store(StoreErrorKind::transient,
-                        std::string{what} + ": timed out waiting for another download of the file");
-        }
-        busy_.insert(id_);
-    }
-    FileGuard(const FileGuard&) = delete;
-    FileGuard& operator=(const FileGuard&) = delete;
-    ~FileGuard() {
-        {
-            const std::lock_guard<std::mutex> lock(mu_);
-            busy_.erase(id_);
-        }
-        cv_.notify_all();
-    }
-
-  private:
-    std::mutex& mu_;
-    std::condition_variable& cv_;
-    std::unordered_set<int32_t>& busy_;
-    int32_t id_;
 };
 
 // Документ, который put_chunk/put_index отдал на отправку.
@@ -361,32 +313,82 @@ struct TelegramStore::Impl {
     Impl(td::TdClient& c, RateLimiter& l, TelegramStoreOptions o)
         : client(c),
           limiter(l),
-          options(o),
+          options(std::move(o)),
           tracker(c),
-          upload_slots(static_cast<std::ptrdiff_t>(std::max<uint32_t>(o.upload_concurrency, 1))),
-          download_slots(
-              static_cast<std::ptrdiff_t>(std::max<uint32_t>(o.download_concurrency, 1))) {
+          upload_slots(
+              static_cast<std::ptrdiff_t>(std::max<uint32_t>(options.upload_concurrency, 1))) {
         // Порог альбомов считается по размеру зашифрованного файла (SPEC 5).
         const uint64_t t = options.album_max_doc_size;
         album_threshold =
             t + kChunkHeaderSize + kSegmentTag * ((t + kSegmentSize - 1) / kSegmentSize);
+        if (!options.tdfiles_dir.empty()) {
+            ReadCacheOptions co;
+            co.state_db = options.state_db;
+            co.dir = options.tdfiles_dir;
+            co.limit = options.cache_limit;
+            cache = std::make_unique<ReadCache>(std::move(co));
+        }
+        SchedulerOptions so;
+        so.download_concurrency = std::max<uint32_t>(options.download_concurrency, 1);
+        so.call_timeout = options.call_timeout;
+        so.stall_timeout = options.download_stall;
+        so.failure_guard = options.download_failure_guard;
+        SchedulerHooks hooks;
+        hooks.pause_until = [this] {
+            const std::lock_guard<std::mutex> lock(read_pause_mu);
+            return read_pause_until;
+        };
+        hooks.on_flood = [this](const TdError& e) { start_read_pause(e); };
+        hooks.on_touch = [this](const std::string& path, const std::string& remote) {
+            touch_cache(path, remote);
+        };
+        hooks.on_forget = [this](const std::string& path) {
+            if (cache) {
+                cache->forget(path);
+            }
+        };
+        sched = std::make_unique<DownloadScheduler>(client, so, std::move(hooks));
+        pf_thread = std::thread([this] { prefetch_loop(); });
     }
+
+    ~Impl() {
+        {
+            const std::lock_guard<std::mutex> lock(pf_mu);
+            pf_stop = true;
+        }
+        pf_cv.notify_all();
+        {
+            const std::lock_guard<std::mutex> lock(maint_mu);
+            maint_stop = true;
+        }
+        maint_cv.notify_all();
+        if (pf_thread.joinable()) {
+            pf_thread.join();
+        }
+        if (maint_thread.joinable()) {
+            maint_thread.join();
+        }
+        sched.reset();  // его потоки зовут хуки, которые обращаются к остальным членам
+        if (cache) {
+            cache->flush();
+        }
+    }
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
 
     td::TdClient& client;
     RateLimiter& limiter;
     const TelegramStoreOptions options;
     td::SendTracker tracker;
     std::counting_semaphore<> upload_slots;
-    std::counting_semaphore<> download_slots;
     uint64_t album_threshold = 0;
 
-    // Файлы, по которым сейчас идёт downloadFile. TDLib отменяет прежний downloadFile файла, если
-    // пришёл новый запрос на тот же файл («Canceled by another downloadFile request», E2E): чтение
-    // пользователя и readahead одного чанка отменяли бы друг друга. Поэтому запросы по одному
-    // файлу идут по очереди, по разным файлам — параллельно (в пределах download_slots).
-    std::mutex file_mu;
-    std::condition_variable file_cv;
-    std::unordered_set<int32_t> files_busy;
+    // Скачивания идут через планировщик (SPEC 8.2): TDLib отменяет прежний downloadFile файла,
+    // если пришёл новый запрос на тот же файл с другими offset и limit, поэтому по файлу активно
+    // одно окно, а число одновременных окон ограничивает download_concurrency. Объявлен после
+    // cache и пауз: его потоки зовут хуки, которые к ним обращаются (см. ~Impl).
+    std::unique_ptr<ReadCache> cache;
+    std::unique_ptr<DownloadScheduler> sched;
 
     // Очередь сбора альбомов.
     std::mutex q_mu;
@@ -410,6 +412,31 @@ struct TelegramStore::Impl {
     std::mutex cache_mu;
     std::unordered_map<int64_t, CachedFile> info_cache;
     std::unordered_set<int64_t> known_ids;  // сообщения, которые TDLib знает в этом процессе
+
+    // Подсказки readahead (SPEC 8.2): prefetch() только ставит их в очередь, фоновый поток
+    // получает file_id (getRemoteFile или getMessages) и отдаёт диапазон планировщику.
+    struct PrefetchJob {
+        ChunkRef ref;
+        uint64_t offset = 0;
+        uint64_t len = 0;
+        uint32_t distance = 0;
+        Clock::time_point queued;
+    };
+    std::mutex pf_mu;
+    std::condition_variable pf_cv;
+    std::deque<PrefetchJob> pf_queue;
+    bool pf_stop = false;
+    bool pf_busy = false;  // фоновый поток обрабатывает подсказку
+    std::condition_variable pf_idle_cv;
+    std::thread pf_thread;
+
+    // Кэш чтения: фоновый поток сбрасывает учёт раз в cache_flush и вытесняет по запросу.
+    std::mutex maint_mu;
+    std::condition_variable maint_cv;
+    bool maint_stop = false;
+    bool maint_wanted = false;  // сумма выше лимита
+    bool maint_started = false;
+    std::thread maint_thread;
 
     // ---- Вспомогательное ----
 
@@ -1004,42 +1031,36 @@ struct TelegramStore::Impl {
 
     // ---- Скачивание ----
 
-    // downloadFile(offset, limit, synchronous) и чтение диапазона из local.path. Возвращает число
-    // прочитанных байт (меньше out.size() только если размер файла неизвестен и файл короче).
-    size_t download_and_read(const FileInfo& file, uint64_t offset, std::span<std::byte> out,
-                             Clock::time_point deadline) {
+    // Чтение диапазона через планировщик (SPEC 8.2): уже скачанное читается pread без downloadFile,
+    // иначе ждёт окно скачивания. deadline — от постановки запроса. Ошибки TDLib превращаются в
+    // StoreError как у read_call; отмена и исчезнувший локальный файл — DownloadCanceled и
+    // LocalFileGone (их повторяет retry_download).
+    void download_and_read(const FileInfo& file, uint64_t offset, std::span<std::byte> out,
+                           ReadKind kind, Clock::time_point deadline) const {
         uint64_t limit = out.size();
         if (file.size > 0) {
             limit = std::min<uint64_t>(limit, file.size - offset);
         }
-        const FileGuard file_guard(file_mu, file_cv, files_busy, file.id, deadline, "downloadFile");
-        const Json reply = read_call(Json{{"@type", "downloadFile"},
-                                          {"file_id", file.id},
-                                          {"priority", kDownloadPriority},
-                                          {"offset", offset},
-                                          {"limit", limit},
-                                          {"synchronous", true}},
-                                     deadline, "downloadFile");
-        const std::string path = get_string(get_obj(reply, "local"), "path");
-        if (path.empty()) {
-            throw_store(StoreErrorKind::permanent, "downloadFile returned no local path");
-        }
-        size_t got = 0;
         try {
-            const Fd fd = Fd::open(path, O_RDONLY);
-            got = pread_full(fd.get(), out.first(limit), offset);
-        } catch (const SysError& e) {
-            if (e.err() == ENOENT) {
-                throw LocalFileGone(StoreErrorKind::transient,
-                                    "TelegramStore: the local copy of the file has gone");
+            sched->read(FileRef{file.id, file.size, file.remote_id}, offset, out.first(limit), kind,
+                        deadline);
+        } catch (const TdException& e) {
+            if (is_download_canceled(e.error())) {
+                throw DownloadCanceled(StoreErrorKind::transient,
+                                       store_error(e, "downloadFile").what());
             }
-            throw_store(StoreErrorKind::permanent,
-                        std::string{"cannot read the downloaded file: "} + e.what());
+            throw store_error(e, "downloadFile");
+        } catch (const DownloadCanceled&) {
+            throw;
+        } catch (const LocalFileGone&) {
+            throw;
+        } catch (const StoreError& e) {
+            // Дедлайн (read_timeout от входа в read_range) вышел: повтор уже не успеет.
+            if (e.kind() == StoreErrorKind::transient && Clock::now() >= deadline) {
+                throw NoRetryError(StoreErrorKind::transient, e.what());
+            }
+            throw;
         }
-        if (got < limit) {
-            throw_store(StoreErrorKind::permanent, "the downloaded file is shorter than expected");
-        }
-        return got;
     }
 
     // Скачивание с повторами (SPEC 8.2, 10.2). resolve(refresh) даёт файл для попытки: при
@@ -1148,6 +1169,212 @@ struct TelegramStore::Impl {
         return lookup_message_file(ref.msg_id, deadline);
     }
 
+    // ---- Readahead и кэш чтения (SPEC 8.2) ----
+
+    void queue_prefetch(const ChunkRef& ref, uint64_t offset, uint64_t len, uint32_t distance) {
+        if (len == 0) {
+            return;
+        }
+        {
+            const std::lock_guard<std::mutex> lock(pf_mu);
+            if (pf_stop) {
+                return;
+            }
+            for (const PrefetchJob& j : pf_queue) {
+                if (j.ref.msg_id == ref.msg_id && j.offset == offset && j.len == len) {
+                    return;  // та же подсказка уже ждёт
+                }
+            }
+            while (pf_queue.size() >= std::max<size_t>(options.prefetch_queue_max, 1)) {
+                pf_queue.pop_front();  // старые подсказки устаревают первыми
+            }
+            pf_queue.push_back({ref, offset, len, distance, Clock::now()});
+        }
+        pf_cv.notify_one();
+    }
+
+    void prefetch_loop() {
+        std::unique_lock<std::mutex> lock(pf_mu);
+        while (!pf_stop) {
+            if (pf_queue.empty()) {
+                pf_cv.wait(lock);
+                continue;
+            }
+            const PrefetchJob job = std::move(pf_queue.front());
+            pf_queue.pop_front();
+            if (Clock::now() - job.queued > options.prefetch_ttl) {
+                continue;
+            }
+            pf_busy = true;
+            lock.unlock();
+            try {
+                run_prefetch(job);
+            } catch (const std::exception& e) {
+                spdlog::debug("TelegramStore: prefetch skipped: {}", e.what());
+            }
+            lock.lock();
+            pf_busy = false;
+            pf_idle_cv.notify_all();
+        }
+    }
+
+    void run_prefetch(const PrefetchJob& job) {
+        const auto deadline = deadline_in(options.call_timeout);
+        ensure_chat(deadline);
+        const FileInfo file = resolve_file(job.ref, deadline, false);
+        uint64_t len = job.len;
+        if (file.size > 0) {
+            if (job.offset >= file.size) {
+                return;
+            }
+            len = std::min<uint64_t>(len, file.size - job.offset);
+        }
+        sched->prefetch(FileRef{file.id, file.size, file.remote_id}, job.offset, len, job.distance);
+    }
+
+    void touch_cache(const std::string& path, const std::string& remote_id) {
+        if (!cache) {
+            return;
+        }
+        cache->note(path, remote_id);
+        if (cache->over_limit()) {
+            {
+                const std::lock_guard<std::mutex> lock(maint_mu);
+                maint_wanted = true;
+            }
+            maint_cv.notify_one();
+        }
+    }
+
+    // Вытеснение через TDLib блокирует его файловый актор на время unlink (FileLoadManager::
+    // unlink_file делает unlink синхронно): все скачивания стоят, пока удаляется файл. Медленные
+    // вызовы пишутся в лог, чтобы такую остановку можно было опознать.
+    static void log_slow_eviction_call(Clock::time_point t0, Clock::time_point t1,
+                                       Clock::time_point t2) {
+        const auto ms = [](Clock::time_point a, Clock::time_point b) {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
+        };
+        const auto total = ms(t0, t2);
+        if (total >= 1000) {
+            spdlog::warn(
+                "TelegramStore: cache eviction through TDLib took {} ms (getRemoteFile {} ms, "
+                "deleteFile {} ms): TDLib downloads stand still meanwhile",
+                total, ms(t0, t1), ms(t1, t2));
+        } else {
+            spdlog::debug("TelegramStore: cache eviction call took {} ms (getRemoteFile {} ms)",
+                          total, ms(t0, t1));
+        }
+    }
+
+    // Удаление файла кэша: getRemoteFile и deleteFile, а если TDLib файл не знает или его
+    // local.path другой — прямо с диска (SPEC 8.2).
+    bool delete_cached(const ReadCacheEntry& e) {
+        bool via_tdlib = false;
+        if (!e.remote_file_id.empty()) {
+            try {
+                const auto t0 = Clock::now();
+                const Json reply = client.call(Json{{"@type", "getRemoteFile"},
+                                                    {"remote_file_id", e.remote_file_id},
+                                                    {"file_type", {{"@type", "fileTypeDocument"}}}},
+                                               options.call_timeout);
+                const auto t1 = Clock::now();
+                const FileInfo info = parse_file(reply);
+                if (info.id != 0 && get_string(get_obj(reply, "local"), "path") == e.path) {
+                    client.call(Json{{"@type", "deleteFile"}, {"file_id", info.id}},
+                                options.call_timeout);
+                    via_tdlib = true;
+                    log_slow_eviction_call(t0, t1, Clock::now());
+                }
+            } catch (const TdException& ex) {
+                spdlog::debug("TelegramStore: cache eviction through TDLib failed: {}",
+                              scrub(ex.error().to_string()));
+            }
+        }
+        std::error_code ec;
+        const bool exists = fs::exists(e.path, ec);
+        if (exists || !via_tdlib) {
+            fs::remove(e.path, ec);
+            if (ec && fs::exists(e.path)) {
+                spdlog::warn("TelegramStore: cannot delete a cache file: {}", ec.message());
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void run_eviction() {
+        if (!cache || !cache->over_limit()) {
+            return;
+        }
+        // Пометки вытеснения снимаются на любом выходе, в том числе по исключению (не только
+        // TdException): иначе файл навсегда остался бы evicting и читатели ждали бы до таймаута.
+        struct Claims {
+            DownloadScheduler& sched;
+            std::vector<std::string> open;
+            explicit Claims(DownloadScheduler& s) : sched(s) {}
+            Claims(const Claims&) = delete;
+            Claims& operator=(const Claims&) = delete;
+            ~Claims() {
+                for (const std::string& path : open) {
+                    sched.end_evict(path, false);
+                }
+            }
+            void release(const std::string& path, bool deleted) {
+                std::erase(open, path);
+                sched.end_evict(path, deleted);
+            }
+        };
+        Claims claims(*sched);
+        const auto victims = cache->choose_victims([&](const ReadCacheEntry& e) {
+            if (!sched->begin_evict(e.path)) {
+                return true;  // файл с активным скачиванием или читающим pread не удаляется
+            }
+            claims.open.push_back(e.path);  // дальше его удаляет цикл ниже и снимает пометку
+            return false;
+        });
+        for (const ReadCacheEntry& v : victims) {
+            if (options.eviction_test_hook) {
+                options.eviction_test_hook(v.path);
+            }
+            const bool gone = delete_cached(v);
+            claims.release(v.path, gone);
+            if (gone) {
+                cache->forget(v.path);
+            }
+        }
+        if (!victims.empty()) {
+            spdlog::debug("TelegramStore: evicted {} file(s) from the read cache", victims.size());
+        }
+    }
+    std::mutex maint_run_mu;  // одно вытеснение за раз
+
+    void maintain() {
+        const std::lock_guard<std::mutex> lock(maint_run_mu);
+        run_eviction();
+        if (cache) {
+            cache->flush();
+        }
+    }
+
+    void maintenance_loop() {
+        std::unique_lock<std::mutex> lock(maint_mu);
+        while (!maint_stop) {
+            maint_cv.wait_for(lock, options.cache_flush,
+                              [&] { return maint_stop || maint_wanted; });
+            if (maint_stop) {
+                break;
+            }
+            maint_wanted = false;
+            lock.unlock();
+            try {
+                maintain();
+            } catch (const std::exception& e) {
+                spdlog::warn("TelegramStore: read cache maintenance failed: {}", e.what());
+            }
+            lock.lock();
+        }
+    }
+
     // ---- Голова ----
 
     std::optional<HeadInfo> read_head() {
@@ -1174,13 +1401,12 @@ struct TelegramStore::Impl {
             file->size > 0 ? std::min<uint64_t>(kHeadHeaderSize, file->size) : kHeadHeaderSize;
         HeadInfo head;
         head.msg_id = id;
-        const SlotGuard slot(download_slots, deadline, "read_head");
         retry_download(
             id, deadline,
             [&](bool refresh) { return refresh ? lookup_message_file(id, deadline) : *file; },
             [&](const FileInfo& target) {
                 head.header.assign(want, std::byte{0});
-                head.header.resize(download_and_read(target, 0, head.header, deadline));
+                download_and_read(target, 0, head.header, ReadKind::blob, deadline);
             });
         return head;
     }
@@ -1190,7 +1416,7 @@ struct TelegramStore::Impl {
 
 TelegramStore::TelegramStore(td::TdClient& client, RateLimiter& limiter,
                              TelegramStoreOptions options)
-    : impl_(std::make_unique<Impl>(client, limiter, options)) {}
+    : impl_(std::make_unique<Impl>(client, limiter, std::move(options))) {}
 
 TelegramStore::~TelegramStore() = default;
 
@@ -1254,12 +1480,18 @@ int64_t TelegramStore::put_index(const std::filesystem::path& blob) {
 }
 
 void TelegramStore::read_range(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out) {
+    read_range_until(ref, offset, out, Deadline::max());
+}
+
+void TelegramStore::read_range_until(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out,
+                                     Deadline until) {
     if (out.empty()) {
         return;
     }
     Impl& s = *impl_;
-    const auto deadline = Impl::deadline_in(s.options.read_timeout);
-    const SlotGuard slot(s.download_slots, deadline, "read_range");
+    // Срок вызывающего (ChunkReader: один на всё чтение чанка) и собственный read_timeout: берётся
+    // ближайший. Повторы после transient и ожидание лимитера делят этот срок.
+    const auto deadline = std::min(until, Impl::deadline_in(s.options.read_timeout));
     s.ensure_chat(deadline);
     s.retry_download(
         ref.msg_id, deadline, [&](bool refresh) { return s.resolve_file(ref, deadline, refresh); },
@@ -1269,7 +1501,7 @@ void TelegramStore::read_range(const ChunkRef& ref, uint64_t offset, std::span<s
                                    "TelegramStore: read_range beyond the end of message " +
                                        std::to_string(ref.msg_id));
             }
-            s.download_and_read(file, offset, out, deadline);
+            s.download_and_read(file, offset, out, ReadKind::user, deadline);
         });
 }
 
@@ -1340,52 +1572,62 @@ void TelegramStore::delete_messages(std::span<const int64_t> msg_ids) {
 
 std::optional<HeadInfo> TelegramStore::read_head() { return impl_->read_head(); }
 
+void TelegramStore::prefetch(const ChunkRef& ref, uint64_t offset, uint64_t len,
+                             uint32_t distance) {
+    impl_->queue_prefetch(ref, offset, len, distance);
+}
+
+void TelegramStore::start_read_cache() {
+    Impl& s = *impl_;
+    if (!s.cache) {
+        return;
+    }
+    {
+        const std::lock_guard<std::mutex> lock(s.maint_mu);
+        if (s.maint_started) {
+            return;
+        }
+        s.maint_started = true;
+    }
+    const ReconcileReport r = s.cache->reconcile();
+    spdlog::info("read cache: {} file(s) kept, {} adopted, {} dropped, {} MiB in use", r.kept,
+                 r.adopted, r.dropped, s.cache->total_bytes() >> 20U);
+    s.maint_thread = std::thread([&s] { s.maintenance_loop(); });
+    if (s.cache->over_limit()) {
+        {
+            const std::lock_guard<std::mutex> lock(s.maint_mu);
+            s.maint_wanted = true;
+        }
+        s.maint_cv.notify_one();
+    }
+}
+
+void TelegramStore::maintain_read_cache() { impl_->maintain(); }
+
+bool TelegramStore::wait_prefetch_idle(std::chrono::milliseconds timeout) {
+    Impl& s = *impl_;
+    std::unique_lock<std::mutex> lock(s.pf_mu);
+    return s.pf_idle_cv.wait_for(lock, timeout, [&] { return s.pf_queue.empty() && !s.pf_busy; });
+}
+
+SchedulerStats TelegramStore::download_stats() const { return impl_->sched->stats(); }
+
+const ReadCache* TelegramStore::read_cache() const noexcept { return impl_->cache.get(); }
+
 Bytes TelegramStore::read_index(int64_t msg_id) {
     Impl& s = *impl_;
     const auto deadline = Impl::deadline_in(s.options.read_timeout);
-    const SlotGuard slot(s.download_slots, deadline, "read_index");
     s.ensure_chat(deadline);
     Bytes data;
     s.retry_download(
         msg_id, deadline, [&](bool) { return s.lookup_message_file(msg_id, deadline); },
         [&](const FileInfo& file) {
-            const FileGuard file_guard(s.file_mu, s.file_cv, s.files_busy, file.id, deadline,
-                                       "downloadFile");
-            const Json reply = s.read_call(Json{{"@type", "downloadFile"},
-                                                {"file_id", file.id},
-                                                {"priority", kDownloadPriority},
-                                                {"offset", 0},
-                                                {"limit", 0},
-                                                {"synchronous", true}},
-                                           deadline, "downloadFile");
-            const Json& local = get_obj(reply, "local");
-            const std::string path = get_string(local, "path");
-            const Json& completed = get_obj(local, "is_downloading_completed");
-            if (path.empty() || !completed.is_boolean() || !completed.get<bool>()) {
-                throw_store(StoreErrorKind::transient,
-                            "downloadFile did not complete the download");
+            if (file.size == 0) {
+                throw NoRetryError(StoreErrorKind::permanent,
+                                   "TelegramStore: the index blob has an unknown size");
             }
-            try {
-                std::error_code ec;
-                const uint64_t size = fs::file_size(path, ec);
-                if (ec == std::errc::no_such_file_or_directory) {
-                    throw LocalFileGone(StoreErrorKind::transient,
-                                        "TelegramStore: the local copy of the file has gone");
-                }
-                if (ec || (file.size > 0 && size != file.size)) {
-                    throw_store(StoreErrorKind::permanent,
-                                "the downloaded file has an unexpected size");
-                }
-                data.assign(size, std::byte{0});
-                const Fd fd = Fd::open(path, O_RDONLY);
-                if (pread_full(fd.get(), data, 0) != size) {
-                    throw_store(StoreErrorKind::permanent,
-                                "the downloaded file is shorter than expected");
-                }
-            } catch (const SysError& e) {
-                throw_store(StoreErrorKind::permanent,
-                            std::string{"cannot read the downloaded file: "} + e.what());
-            }
+            data.assign(file.size, std::byte{0});
+            s.download_and_read(file, 0, data, ReadKind::blob, deadline);
         });
     return data;
 }

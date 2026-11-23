@@ -24,6 +24,16 @@
 // позиция в фазе 1 помечается «заблокированной» и уходит без заливки, а когда позиция 0
 // покидает overlay (release_blocked) — ставится в очередь снова.
 //
+// Класс хранения (SPEC 6.5) выбирает seal_file при каждом запечатывании по размеру: инлайн
+// (try_seal_inline), пакет (seal_to_pack → PackWriter, если файл не больше pack_threshold и
+// не поместился в инлайн, в том числе при исчерпанном бюджете), иначе позиционный чанк
+// (upload_chunk). Файл меняет класс одной транзакцией индекса: новые данные записываются,
+// старые освобождаются (put_extent, set_inline, clear_inline).
+//
+// Место (SPEC 8.3): зашифрованная копия чанка в tmp/ берётся из StagingBudget целиком, до полосы
+// inode, размером полного зашифрованного чанка (из таких аренд и состоит резерв заливки R),
+// после шифрования уменьшается до фактического размера и возвращается, когда tmp-файл удалён.
+//
 // Пустой staging-файл (длина 0) не заливается: SPEC 8.1, позиция без валидных байт — дыра.
 // Индекс не меняется (экстент, если он был, остаётся: откат не глубже последнего коммита),
 // строка overlay удаляется (resolve_empty_position).
@@ -59,6 +69,7 @@ int64_t now_ns() {
 }
 
 constexpr std::string_view kTmpPrefix = "chunk-";
+constexpr std::string_view kTmpPackPrefix = "pack-";  // собранный открытый текст пакета
 
 }  // namespace
 
@@ -98,7 +109,13 @@ bool Vfs::restore_inline_position(int64_t ino) {
     pwrite_full(fd.get(), *data, 0);
     const auto attrs = overlay_->attrs(ino);
     const int64_t now = now_ns();
-    const std::array<ChunkWrite, 1> writes{ChunkWrite{0, 0, 0}};
+    // Учёт (SPEC 8.3): не больше inline_max, под полосой ждать места нельзя — берётся без
+    // проверки лимита (редкий случай восстановления после сбоя).
+    const uint64_t old_len = overlay_->staged({ino, 0});
+    if (data->size() > old_len) {
+        budget_->charge_unchecked(data->size() - old_len);
+    }
+    const std::array<ChunkWrite, 1> writes{ChunkWrite{0, 0, 0, data->size()}};
     overlay_->commit_write(
         ino, writes, attrs.value_or(meta::DirtyAttrs{ino, inode->size, inode->mtime_ns}), now);
     spdlog::warn("vfs: position 0 of inline inode {} is restored from the index", ino);
@@ -111,7 +128,8 @@ void Vfs::recover() {
     // tmp/: недошифрованные или незалитые файлы чанков прошлого сеанса.
     std::error_code ec;
     for (const auto& de : std::filesystem::directory_iterator(paths_.tmp, ec)) {
-        if (de.path().filename().string().starts_with(kTmpPrefix)) {
+        const std::string name = de.path().filename().string();
+        if (name.starts_with(kTmpPrefix) || name.starts_with(kTmpPackPrefix)) {
             std::filesystem::remove(de.path(), ec);
         }
     }
@@ -227,6 +245,28 @@ void Vfs::recover() {
             overlay_->clear_attrs(ino);
         }
     }
+    // Учёт staging пересчитывается по длинам файлов на диске (SPEC 8.3).
+    budget_->reset(overlay_->recount_staged());
+    scan_external_tmp();
+}
+
+void Vfs::scan_external_tmp() {
+    // Файлы tmp/, которые создаёт не Vfs (снимки индекса коммитера): только входят в сумму.
+    // chunk-* и pack-* учтены арендой загрузок.
+    uint64_t total = 0;
+    std::error_code ec;
+    for (const auto& de : std::filesystem::directory_iterator(paths_.tmp, ec)) {
+        const std::string name = de.path().filename().string();
+        if (name.starts_with(kTmpPrefix) || name.starts_with(kTmpPackPrefix)) {
+            continue;
+        }
+        std::error_code fec;
+        if (de.is_regular_file(fec)) {
+            const auto size = de.file_size(fec);
+            total += fec ? 0 : static_cast<uint64_t>(size);
+        }
+    }
+    budget_->set_external(total);
 }
 
 // --- фоновые потоки ---
@@ -251,7 +291,7 @@ void Vfs::start_threads() {
     // Дозалить overlay, оставшийся от прошлого сеанса.
     if (!read_only()) {
         for (const int64_t ino : overlay_->chunk_inos()) {
-            push_job(Job{Job::Kind::seal, ino, 0, false});
+            push_job(Job{Job::Kind::seal, ino, 0, false, false, 0});
         }
     }
 }
@@ -268,6 +308,7 @@ void Vfs::stop_threads() {
     q_cv_.notify_all();
     stop_cv_.notify_all();
     overlay_->notify_all();
+    budget_->notify_all();
     for (std::thread& t : workers_) {
         if (t.joinable()) {
             t.join();
@@ -295,6 +336,7 @@ void Vfs::push_job(const Job& job) {
                     for (Job& q : queue_) {
                         if (q.kind == Job::Kind::seal && q.ino == job.ino) {
                             q.only_expired = false;
+                            q.explicit_close = q.explicit_close || job.explicit_close;
                         }
                     }
                 }
@@ -327,7 +369,14 @@ void Vfs::worker_loop() {
         }
         try {
             if (job.kind == Job::Kind::seal) {
-                seal_file(job.ino, job.only_expired ? SealMode::timer : SealMode::release);
+                if (job.explicit_close) {
+                    seal_file(job.ino, SealMode::explicit_request);
+                    packs_->close_for(job.ino);
+                } else {
+                    seal_file(job.ino, job.only_expired ? SealMode::timer : SealMode::release);
+                }
+            } else if (job.kind == Job::Kind::pack) {
+                packs_->run(job.seq);
             } else {
                 upload_chunk({job.ino, job.idx});
             }
@@ -344,8 +393,8 @@ void Vfs::worker_loop() {
 }
 
 void Vfs::timer_loop() {
-    const auto tick = std::clamp(opts_.seal_delay / 4, std::chrono::milliseconds(1),
-                                 std::chrono::milliseconds(500));
+    const auto tick = std::clamp(std::min(opts_.seal_delay, opts_.pack_max_age) / 4,
+                                 std::chrono::milliseconds(1), std::chrono::milliseconds(500));
     const int64_t delay_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(opts_.seal_delay).count();
     for (;;) {
@@ -358,6 +407,9 @@ void Vfs::timer_loop() {
         if (fatal_.load() || read_only()) {
             continue;
         }
+        packs_->tick();
+        scan_external_tmp();
+        relieve_pressure(0);
         std::unordered_set<int64_t> detached;
         {
             const std::lock_guard lock(refs_mu_);
@@ -366,7 +418,7 @@ void Vfs::timer_loop() {
         int64_t last_ino = 0;
         for (const ChunkKey& key : overlay_->expired(now_ns() - delay_ns)) {
             if (key.ino != last_ino && !detached.contains(key.ino)) {
-                push_job(Job{Job::Kind::seal, key.ino, 0, true});
+                push_job(Job{Job::Kind::seal, key.ino, 0, true, false, 0});
                 last_ino = key.ino;
             }
         }
@@ -394,6 +446,7 @@ void Vfs::set_fatal(const std::string& what) {
     }
     fatal_.store(true);
     overlay_->notify_all();
+    budget_->notify_all();
 }
 
 // --- запечатывание (SPEC 6.5, 8.1) ---
@@ -445,13 +498,25 @@ std::vector<UploadTarget> Vfs::seal_file(int64_t ino, SealMode mode) {
         return {};  // удалён, но открыт: данные умрут вместе с ним, заливать незачем
     }
     const int64_t size = effective_size(*inode);
-    if (size <= params_.inline_max && idxs.size() == 1 && idxs.front() == 0 &&
-        try_seal_inline(ino, *inode, size)) {
-        return {};
-    }
     const bool explicit_request = mode == SealMode::explicit_request;
     const int64_t deadline =
         now_ns() - std::chrono::duration_cast<std::chrono::nanoseconds>(opts_.seal_delay).count();
+    // Класс хранения выбирается заново при каждом запечатывании (SPEC 6.5): инлайн, пакет,
+    // позиционный. Позиция 0 — единственная возможная у файла не больше pack_threshold ≤ S.
+    const bool only_pos0 = idxs.size() == 1 && idxs.front() == 0;
+    if (only_pos0 && size <= params_.inline_max && try_seal_inline(ino, *inode, size)) {
+        return {};
+    }
+    if (only_pos0 && size <= params_.pack_threshold) {
+        // Бюджет инлайна исчерпан или файл не влез в инлайн: в пакет.
+        const auto view = overlay_->chunk({ino, 0});
+        if (mode == SealMode::timer && (!view || view->last_write_ns > deadline)) {
+            return {};
+        }
+        seal_to_pack(ino, size, explicit_request);
+        return explicit_request ? overlay_->targets(ino) : std::vector<UploadTarget>{};
+    }
+    packs_->drop(ino);  // файл вырос из пакета: позиционный класс
     for (const int64_t idx : idxs) {
         if (mode == SealMode::timer) {
             const auto view = overlay_->chunk({ino, idx});
@@ -464,9 +529,30 @@ std::vector<UploadTarget> Vfs::seal_file(int64_t ino, SealMode mode) {
     return explicit_request ? overlay_->targets(ino) : std::vector<UploadTarget>{};
 }
 
+void Vfs::seal_to_pack(int64_t ino, int64_t size, bool explicit_request) {
+    const ChunkKey key{ino, 0};
+    const auto view = overlay_->chunk(key);
+    if (!view) {
+        return;
+    }
+    // Размер объекта: не больше валидной длины staging-файла (хвост из нулей не заливается).
+    struct stat st {};
+    {
+        const Fd fd = Fd::open(overlay_->path_of(key), O_RDONLY);
+        if (::fstat(fd.get(), &st) != 0) {
+            throw SysError(errno, "fstat staging");
+        }
+    }
+    const int64_t len = std::min({size, static_cast<int64_t>(st.st_size), chunk_size_});
+    if (!overlay_->mark_packed(key, view->version, explicit_request)) {
+        return;  // постоянная ошибка этой версии: только по явному запросу
+    }
+    packs_->add(ino, view->version, len);
+}
+
 void Vfs::enqueue_upload(const ChunkKey& key, bool explicit_request) {
     if (overlay_->mark_queued(key, explicit_request)) {
-        push_job(Job{Job::Kind::upload, key.ino, key.idx, false});
+        push_job(Job{Job::Kind::upload, key.ino, key.idx, false, false, 0});
     }
 }
 
@@ -497,12 +583,29 @@ void Vfs::upload_chunk(const ChunkKey& key) {
     std::filesystem::path tmp;
     auto finish = [&](std::optional<int64_t> failed) {
         if (overlay_->end_upload(key, inc, failed)) {
-            push_job(Job{Job::Kind::upload, key.ino, key.idx, false});
+            push_job(Job{Job::Kind::upload, key.ino, key.idx, false, false, 0});
         }
         if (key.idx == 0 && !failed) {
             release_blocked(key.ino);  // позиция 0 ушла из работы: ждавшие позиции могут идти
         }
     };
+
+    // Место под зашифрованную копию (SPEC 8.3): целиком и до полосы, чтобы ожидание не держало
+    // ни писателей, ни применение пакетов. Берётся размером полного чанка (из него и состоит
+    // резерв заливки R), после шифрования уменьшается до фактического.
+    // Аренда берётся после быстрого выхода: чанка уже нет в overlay (применён или отброшен) —
+    // место под копию не нужно, а ожидание его могло бы быть долгим.
+    if (!overlay_->chunk(key)) {
+        if (key.idx == 0) {
+            release_blocked(key.ino);
+        }
+        return;
+    }
+    auto lease = budget_->acquire_internal(crypto::chunk_encrypted_size(static_cast<uint64_t>(s)),
+                                           [this] { return fatal_.load() || stop_flag_.load(); });
+    if (!lease) {
+        return;  // остановка: чанк остаётся в overlay
+    }
 
     // Фаза 1: снимок и шифрование.
     bool blocked = false;
@@ -573,6 +676,7 @@ void Vfs::upload_chunk(const ChunkKey& key) {
     }
     const auto enc_size =
         static_cast<int64_t>(crypto::chunk_encrypted_size(static_cast<uint64_t>(valid)));
+    lease->shrink_to(static_cast<uint64_t>(enc_size));
 
     // Фаза 2: заливка без блокировок.
     auto remove_tmp = [&] {
@@ -618,6 +722,7 @@ void Vfs::upload_chunk(const ChunkKey& key) {
     }
     state_.upload_finished(chunk_id, ref.msg_id);
     remove_tmp();
+    lease->release();
 
     // Фаза 3: применить, если чанк ещё нужен.
     bool applied = false;
@@ -794,6 +899,8 @@ void Vfs::flush_all() {
         auto t = seal_file(ino, SealMode::explicit_request);
         all.insert(all.end(), t.begin(), t.end());
     }
+    // Объекты запечатанных файлов лежат в открытом пакете: закрыть его (SPEC 6.5).
+    packs_->close_open(true);
     wait_targets(all);
 }
 

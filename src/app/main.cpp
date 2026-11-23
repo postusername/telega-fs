@@ -2,6 +2,7 @@
 #include <nlohmann/json.hpp>
 #include <td/telegram/td_json_client.h>
 
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -35,7 +36,16 @@ std::shared_ptr<telega::td::TdTransport> make_tdjson_transport(
     const std::filesystem::path& log_file) {
     auto transport = std::make_shared<telega::td::TdJsonTransport>();
     std::string error;
-    if (!telega::td::set_tdlib_log_file(*transport, log_file, int64_t{16} << 20U, 1, &error)) {
+    // Уровень лога TDLib: по умолчанию 1 (SPEC 10.1). Для диагностического прогона его поднимает
+    // TELEGA_FS_TDLIB_LOG_VERBOSITY (0..5; 4 — отладка загрузок, лог файла TDLib растёт быстро).
+    int verbosity = 1;
+    // NOLINTNEXTLINE(concurrency-mt-unsafe): читается один раз при старте, до потоков
+    if (const char* env = std::getenv("TELEGA_FS_TDLIB_LOG_VERBOSITY");
+        env != nullptr && *env >= '0' && *env <= '9' && env[1] == '\0') {
+        verbosity = *env - '0';
+    }
+    if (!telega::td::set_tdlib_log_file(*transport, log_file, int64_t{16} << 20U, verbosity,
+                                        &error)) {
         throw std::runtime_error("cannot open the TDLib log " + log_file.string() + ": " + error);
     }
     return transport;

@@ -19,16 +19,28 @@
 //   file_id хранится только в кэше процесса: ChunkRef приходит по const-ссылке.
 // - Перед удалением и unpin сообщения, которых процесс не видел, подгружаются getMessages (E2, E5).
 // - Если open() не звали, первый же метод по каналу сам делает getChat (SPEC 2).
+// - Скачивания идут через планировщик (download_scheduler.h, SPEC 8.2): по файлу одно активное
+//   окно, приоритеты пользовательского чтения, головы и readahead (SPEC 10.2), readahead по
+//   подсказкам Store::prefetch. read_timeout отсчитывается от входа в read_range, включая
+//   ожидание в очереди; read_range_until берёт ближайший из своего read_timeout и срока вызывающего
+//   (ChunkReader держит один срок на всё чтение чанка).
+// - Кэш чтения (read_cache.h, SPEC 8.2): учёт файлов tdfiles/ и вытеснение по cache_limit, если в
+//   опциях заданы state_db и tdfiles_dir и вызван start_read_cache().
 // - Секреты и пути в тексте исключений и логах не появляются (SPEC 11).
 //
 // Потокобезопасен. Блокирующие вызовы нельзя делать из потока приёма TdRuntime (SPEC 10.1).
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 
+#include "store/download_scheduler.h"
 #include "store/rate_limiter.h"
+#include "store/read_cache.h"
 #include "store/store.h"
 
 namespace telega::td {
@@ -59,6 +71,25 @@ struct TelegramStoreOptions {
     std::chrono::milliseconds call_timeout{60'000};  // один запрос к TDLib
     // CAS в шаге 4 SPEC 7.1 (read_head после собственного pin может видеть кэш TDLib до минуты)
     // повторяет CommitManager: он сам знает время своего последнего set_head.
+
+    // Планировщик скачиваний (SPEC 8.2, 10.2): остановка без прогресса и обрыв (значения по
+    // умолчанию — для боевых серверов, тесты ставят меньшие).
+    std::chrono::milliseconds download_stall{10'000};
+    std::chrono::milliseconds download_failure_guard{1'000};
+    // Подсказок readahead в очереди не больше стольких (старые отбрасываются) и не старше
+    // prefetch_ttl.
+    size_t prefetch_queue_max = 64;
+    std::chrono::milliseconds prefetch_ttl{10'000};
+
+    // Кэш чтения (SPEC 8.2): файлы TDLib в tdfiles_dir, учёт в таблице read_cache state.sqlite.
+    // Пустые пути — учёта и вытеснения нет. cache_limit 0 — без вытеснения.
+    std::filesystem::path state_db;
+    std::filesystem::path tdfiles_dir;
+    uint64_t cache_limit = uint64_t{4} << 30U;
+    std::chrono::milliseconds cache_flush{60'000};  // сброс учёта в таблицу
+    // Только для тестов: вызывается перед удалением каждой жертвы вытеснения (исключение из него
+    // проверяет, что пометки вытеснения снимаются на любом выходе).
+    std::function<void(const std::string& path)> eviction_test_hook;
 };
 
 class TelegramStore final : public Store {
@@ -76,11 +107,33 @@ class TelegramStore final : public Store {
     [[nodiscard]] bool gathers_albums() const noexcept override { return true; }
     ChunkRef put_chunk(const std::filesystem::path& encrypted_file) override;
     void read_range(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out) override;
+    // Срок вызывающего ограничивает все повторы, ожидание лимитера и очереди; не позже read_timeout
+    // от входа в вызов.
+    void read_range_until(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out,
+                          Deadline until) override;
+    // Ставит подсказку в очередь фонового потока и возвращается сразу (SPEC 8.2).
+    void prefetch(const ChunkRef& ref, uint64_t offset, uint64_t len, uint32_t distance) override;
     void delete_messages(std::span<const int64_t> msg_ids) override;
     std::optional<HeadInfo> read_head() override;
     Bytes read_index(int64_t msg_id) override;
     int64_t put_index(const std::filesystem::path& blob) override;
     void set_head(int64_t new_msg_id, std::optional<int64_t> old_msg_id) override;
+
+    // Кэш чтения (SPEC 8.2): сверка tdfiles/ с таблицей read_cache и запуск фонового потока,
+    // который раз в cache_flush сбрасывает учёт в таблицу, а при превышении cache_limit вытесняет
+    // давно не использованные файлы. Зовётся при монтировании, после того как state.sqlite готов.
+    // Без state_db и tdfiles_dir ничего не делает. Повторный вызов безопасен.
+    void start_read_cache();
+    // Вытеснение (если сумма выше cache_limit) и сброс учёта в таблицу, то же, что делает
+    // фоновый поток. Для размонтирования и тестов.
+    void maintain_read_cache();
+
+    [[nodiscard]] SchedulerStats download_stats() const;
+    // Ждёт, пока очередь подсказок readahead не опустеет и фоновый поток не закончит работу
+    // (для тестов). false — не дождались за timeout.
+    bool wait_prefetch_idle(std::chrono::milliseconds timeout);
+    // nullptr, если учёт кэша не настроен.
+    [[nodiscard]] const ReadCache* read_cache() const noexcept;
 
   private:
     struct Impl;

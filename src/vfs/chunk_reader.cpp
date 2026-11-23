@@ -19,6 +19,10 @@ namespace {
 // Заголовок чанка лежит в том же кэше под этим номером «сегмента».
 constexpr uint64_t kHeaderSlot = std::numeric_limits<uint64_t>::max();
 
+// Диапазон, который начинается в первом мегабайте чанка, читается вместе с заголовком одним
+// вызовом: отдельный вызов за заголовком стоил бы лишней задержки первого байта (E10).
+constexpr uint64_t kHeaderMergeLimit = uint64_t{1} << 20U;
+
 }  // namespace
 
 PlainCache::Value PlainCache::get(int64_t chunk_id, uint64_t segment) {
@@ -72,19 +76,31 @@ void ChunkReader::corrupt(const meta::Chunk& chunk, const std::string& what) {
 }
 
 void ChunkReader::fetch(const meta::Chunk& chunk, const store::ChunkRef& ref, uint64_t offset,
-                        MutableByteSpan out) {
+                        MutableByteSpan out, Deadline deadline) {
     using Clock = std::chrono::steady_clock;
-    const auto deadline = Clock::now() + opts_.read_timeout;
+    const auto timed_out = [&](const std::string& what) {
+        spdlog::error("read of chunk {} (msg {}) timed out: {}", chunk.chunk_id, chunk.msg_id,
+                      what);
+        throw meta::FsError(EIO, "chunk " + std::to_string(chunk.chunk_id) + " timed out");
+    };
     auto delay = opts_.retry_initial;
     for (;;) {
+        // Срок один на всё чтение чанка (SPEC 8.2): ни ожидание места среди скачиваний, ни повтор
+        // не получают его заново, а повтор без остатка срока не начинается.
         {
             std::unique_lock lock(sem_mu_);
-            sem_cv_.wait(lock, [&] { return in_flight_ < opts_.concurrency; });
+            if (!sem_cv_.wait_until(lock, deadline,
+                                    [&] { return in_flight_ < opts_.concurrency; })) {
+                timed_out("waiting for a download slot");
+            }
+            if (Clock::now() >= deadline) {
+                timed_out("the read deadline has passed");
+            }
             ++in_flight_;
         }
         std::optional<store::StoreError> error;
         try {
-            store_.read_range(ref, offset, out);
+            store_.read_range_until(ref, offset, out, deadline);
         } catch (const store::StoreError& e) {
             error = e;
         } catch (...) {
@@ -110,34 +126,36 @@ void ChunkReader::fetch(const meta::Chunk& chunk, const store::ChunkRef& ref, ui
         }
         const auto now = Clock::now();
         if (now >= deadline) {
-            spdlog::error("read of chunk {} (msg {}) timed out: {}", chunk.chunk_id, chunk.msg_id,
-                          error->what());
-            throw meta::FsError(EIO, "chunk " + std::to_string(chunk.chunk_id) + " timed out");
+            timed_out(error->what());
         }
-        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
-        std::this_thread::sleep_for(std::min(delay, left + std::chrono::milliseconds(1)));
+        std::this_thread::sleep_until(std::min(now + delay, deadline));
         delay = std::min(delay * 2, opts_.retry_max);
     }
 }
 
-crypto::ChunkHeader ChunkReader::header(const meta::Chunk& chunk, const store::ChunkRef& ref) {
-    PlainCache::Value raw = cache_.get(chunk.chunk_id, kHeaderSlot);
-    if (!raw) {
-        auto buf = std::make_shared<Bytes>(crypto::kChunkHeaderSize);
-        fetch(chunk, ref, 0, *buf);
-        raw = buf;
-        // В кэш кладём только проверенный заголовок (ниже).
-        try {
-            const crypto::ChunkHeader h = crypto::parse_chunk_header(*raw);
-            if (h.plain_size != static_cast<uint64_t>(chunk.plain_size)) {
-                corrupt(chunk, "plain_size in header differs from index");
-            }
-        } catch (const crypto::CorruptError& e) {
-            corrupt(chunk, e.what());
+crypto::ChunkHeader ChunkReader::accept_header(const meta::Chunk& chunk, ByteSpan raw) {
+    // В кэш кладём только проверенный заголовок.
+    try {
+        const crypto::ChunkHeader h = crypto::parse_chunk_header(raw);
+        if (h.plain_size != static_cast<uint64_t>(chunk.plain_size)) {
+            corrupt(chunk, "plain_size in header differs from index");
         }
-        cache_.put(chunk.chunk_id, kHeaderSlot, raw);
+        cache_.put(chunk.chunk_id, kHeaderSlot,
+                   std::make_shared<const Bytes>(raw.begin(), raw.end()));
+        return h;
+    } catch (const crypto::CorruptError& e) {
+        corrupt(chunk, e.what());
     }
-    return crypto::parse_chunk_header(*raw);
+}
+
+crypto::ChunkHeader ChunkReader::header(const meta::Chunk& chunk, const store::ChunkRef& ref,
+                                        Deadline deadline) {
+    if (const PlainCache::Value raw = cache_.get(chunk.chunk_id, kHeaderSlot)) {
+        return crypto::parse_chunk_header(*raw);
+    }
+    Bytes buf(crypto::kChunkHeaderSize);
+    fetch(chunk, ref, 0, buf, deadline);
+    return accept_header(chunk, buf);
 }
 
 void ChunkReader::read(const meta::Chunk& chunk, uint64_t off, MutableByteSpan out) {
@@ -153,6 +171,8 @@ void ChunkReader::read(const meta::Chunk& chunk, uint64_t off, MutableByteSpan o
     }
     const crypto::SegmentSpan span = crypto::chunk_segments_for(plain_size, off, out.size());
     const store::ChunkRef ref{chunk.msg_id, chunk.remote_file_id.value_or("")};
+    // read_timeout отсчитывается от постановки чтения и общий для заголовка, данных и повторов.
+    const Deadline deadline = std::chrono::steady_clock::now() + opts_.read_timeout;
 
     std::vector<PlainCache::Value> segs(span.count);
     for (uint64_t i = 0; i < span.count; ++i) {
@@ -169,20 +189,36 @@ void ChunkReader::read(const meta::Chunk& chunk, uint64_t off, MutableByteSpan o
         while (j < span.count && !segs[j]) {
             ++j;
         }
-        if (!hdr) {
-            hdr = header(chunk, ref);
-        }
         const uint64_t first = span.first + i;
         const uint64_t run_off = first * crypto::kSegmentSize;
         const uint64_t run_end = std::min(plain_size, (span.first + j) * crypto::kSegmentSize);
         const crypto::SegmentSpan run =
             crypto::chunk_segments_for(plain_size, run_off, run_end - run_off);
-        Bytes enc(run.enc_len);
-        fetch(chunk, ref, run.enc_offset, enc);
+        if (!hdr) {
+            if (const PlainCache::Value raw = cache_.get(chunk.chunk_id, kHeaderSlot)) {
+                hdr = crypto::parse_chunk_header(*raw);
+            }
+        }
+        Bytes enc;
+        ByteSpan enc_view;
+        if (!hdr && run.enc_offset <= kHeaderMergeLimit) {
+            // Заголовка в кэше нет, а диапазон рядом с ним: одним вызовом [0, конец диапазона).
+            enc.resize(run.enc_offset + run.enc_len);
+            fetch(chunk, ref, 0, enc, deadline);
+            hdr = accept_header(chunk, ByteSpan{enc}.first(crypto::kChunkHeaderSize));
+            enc_view = ByteSpan{enc}.subspan(run.enc_offset);
+        } else {
+            if (!hdr) {
+                hdr = header(chunk, ref, deadline);
+            }
+            enc.resize(run.enc_len);
+            fetch(chunk, ref, run.enc_offset, enc, deadline);
+            enc_view = enc;
+        }
         Bytes plain;
         try {
             plain = crypto::decrypt_chunk_segments(
-                k_data_, fs_uuid_, static_cast<uint64_t>(chunk.chunk_id), *hdr, first, enc);
+                k_data_, fs_uuid_, static_cast<uint64_t>(chunk.chunk_id), *hdr, first, enc_view);
         } catch (const crypto::CorruptError& e) {
             corrupt(chunk, e.what());
         }
@@ -215,6 +251,94 @@ void ChunkReader::read(const meta::Chunk& chunk, uint64_t off, MutableByteSpan o
     }
     if (pos != out.size()) {
         corrupt(chunk, "short read");
+    }
+}
+
+// ---- Readahead (SPEC 8.2) ---------------------------------------------------------------
+
+void ChunkReader::forget_handle(uint64_t fh) {
+    const std::lock_guard lock(ra_mu_);
+    ra_.erase(fh);
+}
+
+void ChunkReader::readahead(uint64_t fh, uint64_t off, uint64_t len, uint64_t file_size,
+                            uint64_t chunk_size, const ReadaheadResolver& resolve) {
+    if (fh == 0 || len == 0 || opts_.readahead == 0 || chunk_size == 0) {
+        return;
+    }
+    const uint64_t end = std::min(off + len, file_size);
+    uint64_t start = 0;
+    uint64_t target = 0;
+    {
+        const std::lock_guard lock(ra_mu_);
+        RaState& st = ra_[fh];
+        // Ядро читает параллельно и не по порядку, поэтому допуск — окно (но не меньше начального).
+        const uint64_t tolerance = std::max(st.window, opts_.readahead);
+        const bool sequential =
+            st.have_last && off + tolerance >= st.last_end && off <= st.last_end + tolerance;
+        st.have_last = true;
+        st.last_end = end;
+        if (!sequential) {
+            st.window = 0;
+            st.ra_end = 0;
+            return;
+        }
+        st.window = st.window == 0
+                        ? opts_.readahead
+                        : std::min(st.window * 2, std::max(opts_.readahead_max, opts_.readahead));
+        if (st.ra_end >= end + st.window / 2) {
+            return;  // запрошенное раньше окно ещё далеко
+        }
+        start = std::max(st.ra_end, end);
+        target = std::min(file_size, end + st.window);
+        if (start >= target) {
+            return;
+        }
+        st.ra_end = std::max(st.ra_end, target);
+    }
+    prefetch_window(start, target, off / chunk_size, chunk_size, resolve);
+}
+
+void ChunkReader::prefetch_window(uint64_t start, uint64_t end, uint64_t cur_idx,
+                                  uint64_t chunk_size, const ReadaheadResolver& resolve) {
+    for (uint64_t pos = start; pos < end;) {
+        const uint64_t idx = pos / chunk_size;
+        const uint64_t in_pos = pos % chunk_size;
+        const uint64_t n = std::min(end - pos, chunk_size - in_pos);
+        pos += n;
+        std::optional<ReadaheadTarget> target;
+        try {
+            target = resolve(static_cast<int64_t>(idx));
+        } catch (const std::exception& e) {
+            spdlog::debug("readahead: cannot resolve position {}: {}", idx, e.what());
+            continue;
+        }
+        if (!target || in_pos >= target->len) {
+            continue;
+        }
+        const auto plain_size = static_cast<uint64_t>(target->chunk.plain_size);
+        const uint64_t plain_off = target->chunk_off + in_pos;
+        const uint64_t plain_len = std::min(n, target->len - in_pos);
+        if (plain_off >= plain_size) {
+            continue;
+        }
+        const crypto::SegmentSpan span =
+            crypto::chunk_segments_for(plain_size, plain_off, plain_len);
+        if (span.count == 0) {
+            continue;
+        }
+        // Заголовок входит в диапазон, если тот начинается в первом мегабайте (см. read()).
+        const uint64_t a = span.enc_offset <= kHeaderMergeLimit ? 0 : span.enc_offset;
+        const uint64_t b = span.enc_offset + span.enc_len;
+        const store::ChunkRef ref{target->chunk.msg_id, target->chunk.remote_file_id.value_or("")};
+        const auto distance = static_cast<uint32_t>(std::min<uint64_t>(
+            idx >= cur_idx ? idx - cur_idx : 0, std::numeric_limits<uint32_t>::max()));
+        try {
+            store_.prefetch(ref, a, b - a, distance);
+        } catch (const std::exception& e) {
+            spdlog::debug("readahead: prefetch of chunk {} failed: {}", target->chunk.chunk_id,
+                          e.what());
+        }
     }
 }
 

@@ -256,14 +256,19 @@ TEST_F(VfsData, StreamingUploadOfLargeFile) {
 TEST_F(VfsData, SealDelayTimerUploads) {
     VfsOptions o = fast_options();
     o.seal_delay = milliseconds(20);
+    o.pack_max_age = milliseconds(20);
     env.restart(o);
     const int64_t f = env.mkfile("f");
     const Created keep = v().create(kRoot, bytes_of("open"), 0644, O_RDWR, 0, 0);
-    env.write(keep.attr.ino, 0, pattern(10'000, 13));
+    const Created big = v().create(kRoot, bytes_of("big"), 0644, O_RDWR, 0, 0);
+    env.write(keep.attr.ino, 0, pattern(10'000, 13));  // класс «в пакете»
+    env.write(big.attr.ino, 0, pattern(100'000, 14));  // позиционный
     EXPECT_TRUE(wait_until([&] { return env.staging_files() == 0; }));
     EXPECT_EQ(env.extents(keep.attr.ino).size(), 1U);
+    EXPECT_EQ(env.extents(big.attr.ino).size(), 1U);
     (void)f;
     v().release(keep.fh);
+    v().release(big.fh);
 }
 
 TEST_F(VfsData, UnlinkOpenFileKeepsDataUntilRelease) {

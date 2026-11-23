@@ -33,6 +33,8 @@ void Overlay::load() {
     }
 }
 
+void Overlay::set_pack_hook(std::function<void(int64_t)> hook) { pack_hook_ = std::move(hook); }
+
 std::string Overlay::file_name(const ChunkKey& key) {
     return std::to_string(key.ino) + "-" + std::to_string(key.idx);
 }
@@ -188,6 +190,7 @@ void Overlay::commit_write(int64_t ino, std::span<const ChunkWrite> writes,
             e->version = versions[i];
             e->last_write_ns = now_ns;
         }
+        e->staged = writes[i].file_len;
         add_coverage(*e, writes[i].from, writes[i].to);
     }
     attrs_[ino] = attrs;
@@ -195,17 +198,24 @@ void Overlay::commit_write(int64_t ino, std::span<const ChunkWrite> writes,
 
 void Overlay::cut(const ChunkKey& key, int64_t cut_len, int64_t now_ns) {
     const int64_t version = state_.upsert_dirty_chunk(key.ino, key.idx, file_name(key), now_ns);
-    const std::unique_lock lock(mu_);
+    std::unique_lock lock(mu_);
     auto it = chunks_.find(key);
     Entry& e = it == chunks_.end() ? insert_locked(key, version, now_ns) : it->second;
     e.version = version;
     e.last_write_ns = now_ns;
     e.cut_len = std::min(e.cut_len, cut_len);
+    uint64_t freed = 0;
+    if (e.staged > static_cast<uint64_t>(cut_len)) {
+        freed = e.staged - static_cast<uint64_t>(cut_len);
+        e.staged = static_cast<uint64_t>(cut_len);
+    }
     // Покрытие за новым концом больше не записано.
     for (auto& r : e.covered) {
         r.second = std::min(r.second, static_cast<uint64_t>(cut_len));
     }
     std::erase_if(e.covered, [](const auto& r) { return r.first >= r.second; });
+    lock.unlock();
+    release_staged(freed);
 }
 
 void Overlay::set_attrs(const meta::DirtyAttrs& attrs) {
@@ -237,6 +247,8 @@ void Overlay::drop_from(int64_t ino, int64_t first_idx) {
     if (keys.empty()) {
         return;
     }
+    const bool has_pos0 =
+        std::any_of(keys.begin(), keys.end(), [](const ChunkKey& k) { return k.idx == 0; });
     state_.transaction([&] {
         for (const ChunkKey& k : keys) {
             const auto row = state_.get_dirty_chunk(k.ino, k.idx);
@@ -244,15 +256,26 @@ void Overlay::drop_from(int64_t ino, int64_t first_idx) {
                 state_.delete_dirty_chunk_if_version(k.ino, k.idx, row->version);
             }
         }
+        if (has_pos0) {
+            state_.delete_open_pack(ino);
+        }
     });
     for (const ChunkKey& k : keys) {
         remove_file(k);
     }
+    uint64_t freed = 0;
     {
         const std::unique_lock lock(mu_);
         for (const ChunkKey& k : keys) {
-            chunks_.erase(k);
+            if (const auto it = chunks_.find(k); it != chunks_.end()) {
+                freed += it->second.staged;
+                chunks_.erase(it);
+            }
         }
+    }
+    release_staged(freed);
+    if (has_pos0 && pack_hook_) {
+        pack_hook_(ino);
     }
     cv_.notify_all();
 }
@@ -262,16 +285,25 @@ void Overlay::drop_inode(int64_t ino) {
     state_.transaction([&] {
         state_.delete_dirty_chunks_for_ino(ino);
         state_.delete_dirty_attrs(ino);
+        state_.delete_open_pack(ino);
     });
     for (const int64_t idx : idxs) {
         remove_file({ino, idx});
     }
+    uint64_t freed = 0;
     {
         const std::unique_lock lock(mu_);
         for (const int64_t idx : idxs) {
-            chunks_.erase({ino, idx});
+            if (const auto it = chunks_.find({ino, idx}); it != chunks_.end()) {
+                freed += it->second.staged;
+                chunks_.erase(it);
+            }
         }
         attrs_.erase(ino);
+    }
+    release_staged(freed);
+    if (pack_hook_) {
+        pack_hook_(ino);
     }
     cv_.notify_all();
 }
@@ -285,15 +317,26 @@ void Overlay::drop_position(const ChunkKey& key, bool clear_attrs, bool persist)
             if (clear_attrs) {
                 state_.delete_dirty_attrs(key.ino);
             }
+            if (key.idx == 0) {
+                state_.delete_open_pack(key.ino);
+            }
         });
         remove_file(key);
     }
+    uint64_t freed = 0;
     {
         const std::unique_lock lock(mu_);
-        chunks_.erase(key);
+        if (const auto it = chunks_.find(key); it != chunks_.end()) {
+            freed = it->second.staged;
+            chunks_.erase(it);
+        }
         if (clear_attrs) {
             attrs_.erase(key.ino);
         }
+    }
+    release_staged(freed);
+    if (key.idx == 0 && pack_hook_) {
+        pack_hook_(key.ino);
     }
     cv_.notify_all();
 }
@@ -311,11 +354,13 @@ void Overlay::finish_upload(const ChunkKey& key, uint64_t incarnation, int64_t v
     if (removed) {
         remove_file(key);
     }
+    uint64_t freed = 0;
     {
         const std::unique_lock lock(mu_);
         auto it = chunks_.find(key);
         if (it != chunks_.end() && it->second.incarnation == incarnation) {
             if (removed) {
+                freed = it->second.staged;
                 chunks_.erase(it);
             } else {
                 it->second.applied_version = std::max(it->second.applied_version, version);
@@ -325,7 +370,83 @@ void Overlay::finish_upload(const ChunkKey& key, uint64_t incarnation, int64_t v
             attrs_.erase(key.ino);
         }
     }
+    release_staged(freed);
     cv_.notify_all();
+}
+
+uint64_t Overlay::recount_staged() {
+    std::vector<std::pair<ChunkKey, std::filesystem::path>> files;
+    {
+        const std::shared_lock lock(mu_);
+        for (const auto& [key, e] : chunks_) {
+            files.emplace_back(key, path_of(key));
+        }
+    }
+    std::vector<std::pair<ChunkKey, uint64_t>> sizes;
+    sizes.reserve(files.size());
+    for (const auto& [key, path] : files) {
+        std::error_code ec;
+        const auto size = std::filesystem::file_size(path, ec);
+        sizes.emplace_back(key, ec ? 0 : static_cast<uint64_t>(size));
+    }
+    uint64_t total = 0;
+    const std::unique_lock lock(mu_);
+    for (const auto& [key, size] : sizes) {
+        if (const auto it = chunks_.find(key); it != chunks_.end()) {
+            it->second.staged = size;
+            total += size;
+        }
+    }
+    return total;
+}
+
+uint64_t Overlay::staged(const ChunkKey& key) const {
+    const std::shared_lock lock(mu_);
+    const auto it = chunks_.find(key);
+    return it == chunks_.end() ? 0 : it->second.staged;
+}
+
+PressurePlan Overlay::plan_pressure(uint64_t need_free,
+                                    const std::unordered_set<int64_t>& skip) const {
+    struct Cand {
+        int64_t last_write_ns;
+        int64_t ino;
+        uint64_t staged;
+    };
+    PressurePlan plan;
+    std::vector<Cand> cands;
+    {
+        const std::shared_lock lock(mu_);
+        for (const auto& [key, e] : chunks_) {
+            const bool failed = e.failed_version != 0 && e.failed_version >= e.version;
+            const bool packed = e.packed_version != 0 && e.packed_version >= e.version;
+            const bool applied = e.applied_version >= e.version;
+            if (e.queued || e.uploading || packed || applied) {
+                plan.in_flight += e.staged;
+            } else if (!failed && !e.blocked && !skip.contains(key.ino)) {
+                cands.push_back({e.last_write_ns, key.ino, e.staged});
+            }
+        }
+    }
+    if (plan.in_flight >= need_free) {
+        return plan;
+    }
+    std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) {
+        return a.last_write_ns != b.last_write_ns ? a.last_write_ns < b.last_write_ns
+                                                  : a.ino < b.ino;
+    });
+    uint64_t covered = plan.in_flight;
+    std::unordered_set<int64_t> seen;
+    for (const Cand& c : cands) {
+        if (covered >= need_free) {
+            break;
+        }
+        covered += c.staged;
+        if (seen.insert(c.ino).second) {
+            plan.inos.push_back(c.ino);
+        }
+    }
+    return plan;
 }
 
 bool Overlay::mark_queued(const ChunkKey& key, bool explicit_request) {
@@ -405,9 +526,84 @@ std::vector<ChunkKey> Overlay::expired(int64_t deadline_ns) const {
         if (e.applied_version >= e.version) {
             continue;  // уже залит, строка вот-вот уйдёт
         }
+        if (e.packed_version != 0 && e.packed_version >= e.version) {
+            continue;  // лежит в открытом пакете: его закроют размер, возраст или fsync
+        }
         out.push_back(key);
     }
     return out;
+}
+
+bool Overlay::mark_packed(const ChunkKey& key, int64_t version, bool explicit_request) {
+    const std::unique_lock lock(mu_);
+    const auto it = chunks_.find(key);
+    if (it == chunks_.end()) {
+        return false;
+    }
+    Entry& e = it->second;
+    if (e.failed_version != 0 && e.failed_version >= e.version) {
+        if (!explicit_request) {
+            return false;
+        }
+        e.failed_version = 0;
+    }
+    e.packed_version = version;
+    return true;
+}
+
+void Overlay::clear_packed(const ChunkKey& key) {
+    const std::unique_lock lock(mu_);
+    const auto it = chunks_.find(key);
+    if (it != chunks_.end()) {
+        it->second.packed_version = 0;
+    }
+}
+
+void Overlay::mark_failed(const ChunkKey& key, uint64_t incarnation, int64_t version) {
+    {
+        const std::unique_lock lock(mu_);
+        const auto it = chunks_.find(key);
+        if (it != chunks_.end() && it->second.incarnation == incarnation) {
+            it->second.failed_version = std::max(it->second.failed_version, version);
+            it->second.packed_version = 0;
+        }
+    }
+    cv_.notify_all();
+}
+
+void Overlay::finish_pack(int64_t chunk_id, std::span<const PackedObject> applied) {
+    std::vector<bool> removed(applied.size(), false);
+    state_.transaction([&] {
+        for (size_t i = 0; i < applied.size(); ++i) {
+            const PackedObject& o = applied[i];
+            removed[i] = state_.delete_dirty_chunk_if_version(o.key.ino, o.key.idx, o.version);
+            if (removed[i]) {
+                state_.delete_dirty_attrs(o.key.ino);
+            }
+            state_.delete_open_pack_if_version(o.key.ino, o.version);
+        }
+        state_.remove_upload(chunk_id);
+    });
+    for (size_t i = 0; i < applied.size(); ++i) {
+        if (removed[i]) {
+            remove_file(applied[i].key);
+        }
+    }
+    uint64_t freed = 0;
+    {
+        const std::unique_lock lock(mu_);
+        for (size_t i = 0; i < applied.size(); ++i) {
+            const PackedObject& o = applied[i];
+            const auto it = chunks_.find(o.key);
+            if (it != chunks_.end() && it->second.incarnation == o.incarnation && removed[i]) {
+                freed += it->second.staged;
+                chunks_.erase(it);
+                attrs_.erase(o.key.ino);
+            }
+        }
+    }
+    release_staged(freed);
+    cv_.notify_all();
 }
 
 void Overlay::set_blocked(const ChunkKey& key, uint64_t incarnation) {

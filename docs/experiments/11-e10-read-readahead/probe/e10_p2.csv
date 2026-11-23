@@ -1,0 +1,13 @@
+series,rep,mode,file,doc,prio_initial,issue_ms,first_byte_ms,done_ms,done_rank,a_first_outcome,a_first_outcome_ms,raise_issue_ms,raise_call_ms,a_second_outcome,a_second_outcome_ms,error
+p2-control-r1,1,control,A,16,1,2.0,1637.2,2231.3,4,ok,2231.3,,,,,
+p2-control-r1,1,control,B,17,8,0.0,63.4,1645.8,3,,,,,,,
+p2-control-r1,1,control,C,18,8,0.5,720.4,1424.3,2,,,,,,,
+p2-control-r1,1,control,D,19,8,1.3,123.1,758.3,1,,,,,,,
+p2-raise-r1,1,raise,A,20,1,1.7,393.5,999.5,1,ok,999.4,302.0,0.5,,,
+p2-raise-r1,1,raise,B,21,8,0.0,68.6,2250.8,4,,,,,,,
+p2-raise-r1,1,raise,C,22,8,0.5,1337.8,2006.6,3,,,,,,,
+p2-raise-r1,1,raise,D,23,8,0.9,179.8,1374.7,2,,,,,,,
+p2-raise_sync-r1,1,raise_sync,A,24,1,1.0,400.5,1020.6,1,ok,1020.3,301.2,0.3,ok,1020.5,
+p2-raise_sync-r1,1,raise_sync,B,25,8,0.0,70.9,2302.6,4,,,,,,,
+p2-raise_sync-r1,1,raise_sync,C,26,8,0.4,1392.5,2028.8,3,,,,,,,
+p2-raise_sync-r1,1,raise_sync,D,27,8,0.7,231.9,1430.7,2,,,,,,,

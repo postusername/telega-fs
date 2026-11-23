@@ -9,6 +9,7 @@
 // внешней транзакции — отдельная долговечная транзакция (WAL, synchronous = FULL).
 // Порядок блокировок (SPEC 9): мьютекс MetaStore, если нужен, берётся раньше этого.
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -68,12 +69,22 @@ struct UploadRecord {
     int64_t started_ns = 0;
 };
 
+// Объект открытого пакета (SPEC 6.4, 6.5).
+struct OpenPackRow {
+    int64_t ino = 0;
+    int64_t version = 0;  // version грязного чанка позиции 0 на момент добавления
+    int64_t len = 0;  // размер объекта на момент добавления
+    int64_t added_ns = 0;  // возраст пакета считается от самого старого объекта
+};
+
 class StateStore {
   public:
     // Создать state.sqlite со схемой 6.4. path не должен существовать.
     static void create(const std::filesystem::path& path);
-    // Открыть существующий файл.
-    explicit StateStore(const std::filesystem::path& path);
+    // Открыть существующий файл. Схема M2 мигрирует: open_pack пересоздаётся (она была пуста),
+    // read_cache добавляется (SPEC 6.4).
+    // migrate = false (--ro): схема не меняется, state.sqlite остаётся нетронутым (SPEC 7.2).
+    explicit StateStore(const std::filesystem::path& path, bool migrate = true);
     StateStore(const StateStore&) = delete;
     StateStore& operator=(const StateStore&) = delete;
     StateStore(StateStore&&) = delete;
@@ -126,7 +137,8 @@ class StateStore {
     void reset_chain_to_snapshot(int64_t msg_id, int64_t blob_size);
 
     // --- dirty_chunks ---
-    // Вставить или обновить запись, version++ (новая запись — version 1). Вернуть version.
+    // Вставить или обновить запись. version берётся из монотонного счётчика StateStore (растёт
+    // строго, не сбрасывается при пересоздании строки). Вернуть version.
     int64_t upsert_dirty_chunk(int64_t ino, int64_t idx, const std::string& path,
                                int64_t last_write_ns);
     [[nodiscard]] std::optional<DirtyChunk> get_dirty_chunk(int64_t ino, int64_t idx);
@@ -152,14 +164,30 @@ class StateStore {
     [[nodiscard]] std::vector<UploadRecord> list_uploads();
     void remove_upload(int64_t chunk_id);
 
-    // open_pack — только таблица в схеме, работа с пакетами появится в M3.
+    // --- open_pack (SPEC 6.5) ---
+    // Вставить или заменить строку объекта.
+    void upsert_open_pack(const OpenPackRow& row);
+    [[nodiscard]] std::vector<OpenPackRow> list_open_pack();
+    void delete_open_pack(int64_t ino);
+    // Удалить строку, только если version совпала (транзакция применения пакета).
+    bool delete_open_pack_if_version(int64_t ino, int64_t version);
+
+    // Срок ожидания чужой блокировки state.sqlite (по умолчанию 5 с); для тестов.
+    void set_busy_timeout(std::chrono::milliseconds timeout);
 
   private:
     void transaction_impl(const std::function<void()>& fn);
+    // Выполнить запись под mutex_; SQLITE_BUSY (соседнее соединение, например ReadCache, держит
+    // блокировку дольше busy_timeout) повторяется с паузой между попытками, мьютекс между
+    // ними отпускается. Повторять можно: при BUSY оператор не выполнялся.
+    template <typename F>
+    auto write_retry(F&& fn);
     std::vector<DirtyChunk> query_dirty_chunks(std::string_view sql, std::optional<int64_t> ino);
 
     std::recursive_mutex mutex_;
     Db db_;
+    int64_t version_seq_ = 0;  // последняя выданная version грязного чанка (под mutex_)
+    bool legacy_schema_ = false;  // open_pack старой схемы (только --ro): список пуст
 };
 
 }  // namespace telega::meta

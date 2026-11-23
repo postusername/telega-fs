@@ -29,6 +29,9 @@ void add_e7_command(CLI::App& app, const BenchOptions& options, int* exit_code);
 // Эксперимент E9 (холодное чтение из пакетов, SPEC 17.12): сетевая часть, офлайн-часть — tgfs-sim.
 void add_e9_command(CLI::App& app, const BenchOptions& options, int* exit_code);
 
+// Эксперимент E10 (чтение и readahead, SPEC 17.13).
+void add_e10_command(CLI::App& app, const BenchOptions& options, int* exit_code);
+
 // Настройка и уборка канала для E2E telega-fs в режиме бота (SPEC 14).
 void add_e2e_command(CLI::App& app, const BenchOptions& options, int* exit_code);
 

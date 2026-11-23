@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
+#include <cctype>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -76,8 +78,10 @@ bool process_alive(pid_t pid) {
     return state != 'Z' && state != 'X';
 }
 
+// extra_fd >= 0 — дескриптор, который потомок получает как fd 3 (остальные без O_CLOEXEC не
+// наследуются: дескрипторы тестов открыты с O_CLOEXEC).
 pid_t spawn(const std::vector<std::string>& argv, const EnvMap& env_changes,
-            const fs::path& stdin_file, const fs::path& out_file) {
+            const fs::path& stdin_file, const fs::path& out_file, int extra_fd = -1) {
     std::vector<std::string> env_strings;
     for (char** e = environ; e != nullptr && *e != nullptr; ++e) {
         const std::string s{*e};
@@ -113,6 +117,9 @@ pid_t spawn(const std::vector<std::string>& argv, const EnvMap& env_changes,
                                      O_RDONLY, 0);
     posix_spawn_file_actions_addopen(&fa, 1, out_file.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
     posix_spawn_file_actions_adddup2(&fa, 1, 2);
+    if (extra_fd >= 0) {
+        posix_spawn_file_actions_adddup2(&fa, extra_fd, 3);
+    }
     pid_t pid = 0;
     const int rc = ::posix_spawnp(&pid, argp[0], &fa, nullptr, argp.data(), envp.data());
     posix_spawn_file_actions_destroy(&fa);
@@ -304,10 +311,19 @@ Exit Mount::wait_gone(milliseconds timeout) {
 Exit Mount::wait_exit(milliseconds timeout) { return wait_gone(timeout); }
 
 Exit Mount::unmount(milliseconds timeout) {
-    const RunResult r = run_program({"fusermount3", "-u", dir_.string()}, {}, "",
-                                    dir_.parent_path() / "scratch", timeout);
-    if (!r.exit.ok()) {
-        fail("fusermount3 -u failed: " + r.output);
+    // Дескриптор, только что закрытый тестом, ядро может отпустить с задержкой: EBUSY повторяется,
+    // пока не истечёт время.
+    const auto deadline = Clock::now() + timeout;
+    for (;;) {
+        const RunResult r = run_program({"fusermount3", "-u", dir_.string()}, {}, "",
+                                        dir_.parent_path() / "scratch", timeout);
+        if (r.exit.ok()) {
+            break;
+        }
+        if (r.output.find("busy") == std::string::npos || Clock::now() > deadline) {
+            fail("fusermount3 -u failed: " + r.output);
+        }
+        std::this_thread::sleep_for(milliseconds(200));
     }
     const Exit x = wait_gone(timeout);
     finished_ = true;
@@ -338,16 +354,194 @@ void Mount::kill_hard() {
     finished_ = true;
 }
 
+// --- сторож и уборка осиротевших окружений ---
+
+namespace {
+
+// Сторож — shell-скрипт, запущенный через posix_spawn (fork в многопоточном тесте под TSan
+// небезопасен). Он читает из pipe сообщения "M <точка>" и ждёт EOF: конец записи держит только
+// тест (O_CLOEXEC), поэтому EOF приходит, когда тест завершился, как бы он ни завершился.
+// Тогда: SIGTERM процессам, в командной строке которых есть корень окружения (демон mount, его
+// fusermount3; корень уникален, чужие процессы не затрагиваются), через 5 с SIGKILL, затем
+// fusermount3 -uz для всех точек под корнем и удаление корня. Сам сторож не содержит корня в
+// командной строке (он в переменной окружения), поэтому себя не находит. Двойной запуск
+// ( ... & ) в новой сессии отвязывает сторожа от дерева теста: ctest убивает дерево по таймауту.
+constexpr const char* kWatchdogLauncher =
+    "S=''; command -v setsid >/dev/null 2>&1 && S=setsid; "
+    "( $S sh -c \"$WD_SCRIPT\" <&3 >/dev/null 2>&1 3<&- & )";
+
+constexpr const char* kWatchdogScript = R"sh(
+trap '' HUP INT TERM PIPE
+mps=
+while IFS= read -r line; do
+  case "$line" in
+    "M "*) mps="$mps
+${line#M }" ;;
+  esac
+done
+root=$WD_ROOT
+case "${root##*/}" in tgfs-it-*) ;; *) exit 0 ;; esac
+find_pids() {
+  for d in /proc/[0-9]*; do
+    p=${d#/proc/}
+    [ "$p" = "$$" ] && continue
+    c=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+    case "$c" in *"$root"*) echo "$p" ;; esac
+  done
+}
+for p in $(find_pids); do kill -TERM "$p" 2>/dev/null; done
+i=0
+while [ "$i" -lt 50 ]; do
+  [ -z "$(find_pids)" ] && break
+  sleep 0.1
+  i=$((i + 1))
+done
+for p in $(find_pids); do kill -KILL "$p" 2>/dev/null; done
+unmount() { fusermount3 -uz -- "$1" 2>/dev/null; }
+printf '%s
+' "$mps" | while IFS= read -r mp; do
+  case "$mp" in "$root"/*) unmount "$mp" ;; esac
+done
+while IFS= read -r l; do
+  set -- $l
+  case "$5" in "$root"/*) unmount "$5" ;; esac
+done < /proc/self/mountinfo
+[ -d "$root" ] && rm -rf --one-file-system -- "$root"
+exit 0
+)sh";
+
+// Добавить auto_unmount к -o (libfuse: fusermount3 размонтирует точку, когда демон умер, в том
+// числе от SIGKILL) или передать свой -o.
+std::vector<std::string> with_auto_unmount(std::vector<std::string> extra) {
+    for (size_t i = 0; i + 1 < extra.size(); ++i) {
+        if (extra[i] == "-o") {
+            extra[i + 1] += ",auto_unmount";
+            return extra;
+        }
+    }
+    extra.emplace_back("-o");
+    extra.emplace_back("auto_unmount");
+    return extra;
+}
+
+// Время запуска процесса (поле 22 /proc/<pid>/stat): отличает владельца от нового процесса с тем
+// же pid.
+std::optional<std::string> process_start_time(pid_t pid) {
+    std::ifstream in("/proc/" + std::to_string(pid) + "/stat");
+    if (!in) {
+        return std::nullopt;
+    }
+    std::string line;
+    std::getline(in, line);
+    const auto rp = line.rfind(')');
+    if (rp == std::string::npos) {
+        return std::nullopt;
+    }
+    std::istringstream rest{line.substr(rp + 2)};
+    std::string tok;
+    for (int i = 3; i <= 22 && (rest >> tok); ++i) {
+        if (i == 22) {
+            return tok;
+        }
+    }
+    return std::nullopt;
+}
+
+constexpr const char* kOwnerFile = ".owner";
+
+void write_owner(const fs::path& root) {
+    std::ofstream out(root / kOwnerFile, std::ios::trunc);
+    out << ::getpid() << ' ' << process_start_time(::getpid()).value_or("0") << '\n';
+}
+
+// Владелец жив? Нет файла владельца — «жив» (чужое: не трогаем).
+bool owner_alive(const fs::path& root) {
+    std::ifstream in(root / kOwnerFile);
+    long pid = 0;
+    std::string start;
+    if (!(in >> pid >> start) || pid <= 0) {
+        return true;
+    }
+    const auto now = process_start_time(static_cast<pid_t>(pid));
+    return now.has_value() && *now == start;
+}
+
+// Процессы, в командной строке которых есть корень.
+std::vector<pid_t> processes_mentioning(const std::string& root) {
+    std::vector<pid_t> out;
+    std::error_code ec;
+    for (const auto& de : fs::directory_iterator("/proc", ec)) {
+        const std::string name = de.path().filename().string();
+        if (name.empty() || std::isdigit(static_cast<unsigned char>(name[0])) == 0) {
+            continue;
+        }
+        std::string cmd = slurp(de.path() / "cmdline");
+        std::ranges::replace(cmd, '\0', ' ');
+        if (cmd.find(root) != std::string::npos && std::stol(name) != ::getpid()) {
+            out.push_back(static_cast<pid_t>(std::stol(name)));
+        }
+    }
+    return out;
+}
+
+// Убрать окружение умершего теста: процессы, монтирования и каталог. Трогает только каталог с
+// файлом владельца, который создала эта обвязка, и только если владелец уже мёртв.
+void sweep_orphan(const fs::path& root) {
+    const std::string r = root.string();
+    for (const pid_t p : processes_mentioning(r)) {
+        ::kill(p, SIGTERM);
+    }
+    const auto deadline = Clock::now() + std::chrono::seconds(5);
+    while (!processes_mentioning(r).empty() && Clock::now() < deadline) {
+        std::this_thread::sleep_for(milliseconds(50));
+    }
+    for (const pid_t p : processes_mentioning(r)) {
+        ::kill(p, SIGKILL);
+    }
+    for (const MountInfo& m : read_mountinfo()) {
+        if (m.mountpoint.starts_with(r + "/")) {
+            (void)run_program({"fusermount3", "-uz", "--", m.mountpoint}, {}, "",
+                              fs::temp_directory_path(), std::chrono::seconds(30));
+        }
+    }
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
+void sweep_orphans(const fs::path& base) {
+    std::error_code ec;
+    for (const auto& de : fs::directory_iterator(base, ec)) {
+        const std::string name = de.path().filename().string();
+        if (!name.starts_with("tgfs-it-") || !de.is_directory(ec) ||
+            !fs::exists(de.path() / kOwnerFile, ec) || owner_alive(de.path())) {
+            continue;
+        }
+        try {
+            sweep_orphan(de.path());
+        } catch (...) {  // NOLINT(bugprone-empty-catch): уборка чужого мусора не роняет тест
+        }
+    }
+}
+
+}  // namespace
+
 // --- Env ---
 
-Env::Env(ProfileSpec spec) : spec_(std::move(spec)) {
-    const char* base = std::getenv("TELEGA_TEST_TMPDIR");  // NOLINT(concurrency-mt-unsafe)
-    const fs::path tmp = base != nullptr ? fs::path{base} : fs::temp_directory_path();
+Env::Env(ProfileSpec spec, const fs::path& base_dir) : spec_(std::move(spec)) {
+    fs::path tmp = base_dir;
+    if (tmp.empty()) {
+        const char* base = std::getenv("TELEGA_TEST_TMPDIR");  // NOLINT(concurrency-mt-unsafe)
+        tmp = base != nullptr ? fs::path{base} : fs::temp_directory_path();
+    }
+    fs::create_directories(tmp);
+    sweep_orphans(tmp);  // окружения убитых тестов (только своя база и только с мёртвым владельцем)
     std::string pattern = (tmp / "tgfs-it-XXXXXX").string();
     if (::mkdtemp(pattern.data()) == nullptr) {
         fail_errno("mkdtemp " + pattern);
     }
     root_ = fs::canonical(pattern);
+    write_owner(root_);
+    start_watchdog();
     fs::create_directories(scratch());
     local_dir_ = root_ / "channel";
     keyfile_ = root_ / "keyfile";
@@ -360,6 +554,41 @@ Env::Env(ProfileSpec spec) : spec_(std::move(spec)) {
 Env::~Env() {
     std::error_code ec;
     fs::remove_all(root_, ec);
+    if (watch_fd_ >= 0) {
+        ::close(watch_fd_);  // сторож увидит EOF, убедится, что убирать нечего, и выйдет
+    }
+}
+
+void Env::start_watchdog() {
+    if (std::getenv("TELEGA_ITEST_NO_WATCHDOG") != nullptr) {  // NOLINT(concurrency-mt-unsafe)
+        return;  // проверка самого сторожа: без него тест с SIGKILL оставляет демона
+    }
+    std::array<int, 2> fds{};
+    if (::pipe2(fds.data(), O_CLOEXEC) != 0) {
+        return;  // без сторожа тесты работают, как раньше
+    }
+    const EnvMap env{{"WD_ROOT", root_.string()}, {"WD_SCRIPT", std::string{kWatchdogScript}}};
+    pid_t pid = 0;
+    try {
+        pid = spawn({"sh", "-c", kWatchdogLauncher}, env, {}, "/dev/null", fds[0]);
+    } catch (const std::exception&) {
+        ::close(fds[0]);
+        ::close(fds[1]);
+        return;
+    }
+    ::close(fds[0]);
+    int status = 0;
+    ::waitpid(pid, &status, 0);  // промежуточный sh выходит сразу, сторож остался сиротой
+    watch_fd_ = fds[1];
+}
+
+void Env::watch_mount(const fs::path& dir) const {
+    if (watch_fd_ < 0) {
+        return;
+    }
+    const std::string line = "M " + dir.string() + "\n";
+    const ssize_t n = ::write(watch_fd_, line.data(), line.size());
+    (void)n;  // сторож умер — не страшно: тест просто идёт без него
 }
 
 fs::path Env::data_dir() const { return data_home_ / "telega-fs" / "main"; }
@@ -443,8 +672,10 @@ void Env::init(const std::string& stdin_text) const {
 std::unique_ptr<Mount> Env::mount(const std::vector<std::string>& extra, const EnvMap& extra_env,
                                   const std::string& stdin_text, const std::string& dir_name) {
     const fs::path dir = mountpoint(dir_name);
+    watch_mount(dir);
     std::vector<std::string> args{"mount", dir.string()};
-    args.insert(args.end(), extra.begin(), extra.end());
+    const std::vector<std::string> opts = with_auto_unmount(extra);
+    args.insert(args.end(), opts.begin(), opts.end());
     const RunResult r = run(args, extra_env, stdin_text);
     if (!r.exit.ok()) {
         fail("telega-fs mount failed (code " + std::to_string(r.exit.code) + "):\n" + r.output +
@@ -467,12 +698,14 @@ std::unique_ptr<Mount> Env::mount(const std::vector<std::string>& extra, const E
 std::unique_ptr<Mount> Env::mount_fg(const std::vector<std::string>& extra, const EnvMap& extra_env,
                                      const std::string& dir_name) {
     const fs::path dir = mountpoint(dir_name);
+    watch_mount(dir);
     EnvMap env = base_env();
     for (const auto& [k, v] : extra_env) {
         env[k] = v;
     }
     std::vector<std::string> argv{TELEGA_FS_BINARY, "mount", "-f", dir.string()};
-    argv.insert(argv.end(), extra.begin(), extra.end());
+    const std::vector<std::string> opts = with_auto_unmount(extra);
+    argv.insert(argv.end(), opts.begin(), opts.end());
     const fs::path out = scratch() / ("fg-" + std::to_string(fg_runs_++) + ".txt");
     const pid_t pid = spawn(argv, env, {}, out);
     std::unique_ptr<Mount> m{new Mount(dir, pid, true, out)};
@@ -504,15 +737,22 @@ uint64_t splitmix(uint64_t x) {
 }  // namespace
 
 void fill_pattern(uint8_t* out, uint64_t offset, uint64_t len, uint64_t seed) {
-    uint64_t word_index = ~uint64_t{0};
-    uint64_t word = 0;
-    for (uint64_t i = 0; i < len; ++i) {
+    static_assert(std::endian::native == std::endian::little, "pattern bytes are little-endian");
+    // Байт на позиции pos — байт (pos % 8) слова с номером pos / 8; целые слова копируются разом.
+    uint64_t i = 0;
+    while (i < len) {
         const uint64_t pos = offset + i;
-        if (pos / 8 != word_index) {
-            word_index = pos / 8;
-            word = splitmix(seed * 0x2545F4914F6CDD1DULL + word_index);
+        const uint64_t word = splitmix(seed * 0x2545F4914F6CDD1DULL + pos / 8);
+        const uint64_t first = pos % 8;
+        const uint64_t n = std::min<uint64_t>(8 - first, len - i);
+        if (n == 8) {
+            std::memcpy(out + i, &word, 8);
+        } else {
+            for (uint64_t k = 0; k < n; ++k) {
+                out[i + k] = static_cast<uint8_t>(word >> ((first + k) * 8));
+            }
         }
-        out[i] = static_cast<uint8_t>(word >> ((pos % 8) * 8));
+        i += n;
     }
 }
 

@@ -102,7 +102,9 @@ uint64_t file_size(const Fd& fd) {
 }
 
 // Скопировать src в dst через dst.tmp + fsync + rename + fsync каталога.
-void copy_file_durable(const Fd& src, const std::filesystem::path& dst) {
+// throttle(n) вызывается перед записью каждого блока из n байт.
+void copy_file_durable(const Fd& src, const std::filesystem::path& dst,
+                       const std::function<void(uint64_t)>& throttle) {
     auto tmp = dst;
     tmp += ".tmp";
     try {
@@ -115,6 +117,7 @@ void copy_file_durable(const Fd& src, const std::filesystem::path& dst) {
                 if (n == 0) {
                     break;
                 }
+                throttle(n);
                 pwrite_full(out.get(), ByteSpan{buf}.first(n), offset);
                 offset += n;
             }
@@ -195,6 +198,7 @@ std::vector<FaultRule> parse_fault_rules(std::string_view spec) {
         }
 
         constexpr std::string_view kDelayPrefix = "delay=";
+        constexpr std::string_view kBandwidthPrefix = "bandwidth=";
         if (action_text == "transient") {
             rule.action = FaultAction::transient;
         } else if (action_text == "permanent") {
@@ -210,10 +214,26 @@ std::vector<FaultRule> parse_fault_rules(std::string_view spec) {
             }
             rule.action = FaultAction::delay;
             rule.delay = std::chrono::milliseconds{*ms};
+        } else if (action_text.starts_with(kBandwidthPrefix)) {
+            const auto bps = parse_int<uint64_t>(trim(action_text.substr(kBandwidthPrefix.size())));
+            if (!bps || *bps == 0) {
+                throw std::invalid_argument(quoted +
+                                            "bandwidth must be a positive integer of bytes/s");
+            }
+            if (rule.op != StoreOp::put_chunk && rule.op != StoreOp::put_index) {
+                throw std::invalid_argument(quoted +
+                                            "bandwidth is only for put_chunk and put_index");
+            }
+            if (rule.nth) {
+                throw std::invalid_argument(quoted + "bandwidth needs call number '*'");
+            }
+            rule.action = FaultAction::bandwidth;
+            rule.bytes_per_sec = *bps;
         } else {
             throw std::invalid_argument(
                 quoted + "unknown action '" + std::string(action_text) +
-                "' (expected transient, permanent, crash_before, crash_after, delay=<ms>)");
+                "' (expected transient, permanent, crash_before, crash_after, delay=<ms>, "
+                "bandwidth=<bytes/s>)");
         }
         rules.push_back(rule);
     }
@@ -237,6 +257,10 @@ LocalDirStore::LocalDirStore(std::filesystem::path dir)
           ::_exit(kCrashExitCode);  // имитация kill -9: без деструкторов и flush
       }) {
     std::filesystem::create_directories(msgs_dir_);
+    {
+        const std::lock_guard stats_lock(stats_mu_);
+        write_stats_locked();
+    }
     // next_id не меньше наибольшего существующего id + 1: защита от потерянного или
     // испорченного вручную next_id, чтобы id никогда не выдавались повторно.
     const auto existing = scan_messages(msgs_dir_);
@@ -252,8 +276,97 @@ LocalDirStore::LocalDirStore(std::filesystem::path dir)
     }
 }
 
+StoreStats parse_store_stats(std::string_view text) {
+    StoreStats st;
+    while (!text.empty()) {
+        const size_t eol = text.find('\n');
+        const std::string_view line = text.substr(0, eol);
+        text = eol == std::string_view::npos ? std::string_view{} : text.substr(eol + 1);
+        const size_t sp = line.find(' ');
+        if (sp == std::string_view::npos) {
+            continue;
+        }
+        const std::string_view name = line.substr(0, sp);
+        uint64_t value = 0;
+        const std::string_view digits = line.substr(sp + 1);
+        const auto [ptr, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), value);
+        if (ec != std::errc{} || ptr != digits.data() + digits.size()) {
+            continue;
+        }
+        if (name == "read_range_calls") {
+            st.read_range_calls = value;
+        } else if (name == "read_range_bytes") {
+            st.read_range_bytes = value;
+        } else if (name == "prefetch_calls") {
+            st.prefetch_calls = value;
+        } else if (name == "prefetch_bytes") {
+            st.prefetch_bytes = value;
+        }
+    }
+    return st;
+}
+
+StoreStats read_store_stats(const std::filesystem::path& dir) {
+    try {
+        const Bytes data = read_file(dir / kStatsFileName);
+        return parse_store_stats(
+            std::string_view{reinterpret_cast<const char*>(data.data()), data.size()});
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+StoreStats LocalDirStore::stats() const {
+    const std::lock_guard lock(stats_mu_);
+    return stats_;
+}
+
+// Под stats_mu_. Ошибки записи не мешают работе хранилища: статистика только для тестов.
+void LocalDirStore::write_stats_locked() const {
+    const std::string text = "read_range_calls " + std::to_string(stats_.read_range_calls) +
+                             "\nread_range_bytes " + std::to_string(stats_.read_range_bytes) +
+                             "\nprefetch_calls " + std::to_string(stats_.prefetch_calls) +
+                             "\nprefetch_bytes " + std::to_string(stats_.prefetch_bytes) + "\n";
+    const auto tmp = dir_ / (std::string{kStatsFileName} + ".tmp");
+    const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        return;
+    }
+    const bool wrote = ::write(fd, text.data(), text.size()) == static_cast<ssize_t>(text.size());
+    ::close(fd);
+    std::error_code ec;
+    if (wrote) {
+        std::filesystem::rename(tmp, dir_ / kStatsFileName, ec);
+    }
+}
+
+void LocalDirStore::count_read(uint64_t bytes) {
+    const std::lock_guard lock(stats_mu_);
+    ++stats_.read_range_calls;
+    stats_.read_range_bytes += bytes;
+    write_stats_locked();
+}
+
+void LocalDirStore::count_prefetch(uint64_t bytes) {
+    const std::lock_guard lock(stats_mu_);
+    ++stats_.prefetch_calls;
+    stats_.prefetch_bytes += bytes;
+    write_stats_locked();
+}
+
+void LocalDirStore::prefetch(const ChunkRef& /*ref*/, uint64_t /*offset*/, uint64_t len,
+                             uint32_t /*distance*/) {
+    count_prefetch(len);
+}
+
 void LocalDirStore::set_faults(std::vector<FaultRule> rules) {
     const std::lock_guard lock(mu_);
+    bandwidth_.fill(0);
+    for (const auto& rule : rules) {
+        if (rule.action == FaultAction::bandwidth) {
+            bandwidth_.at(static_cast<size_t>(rule.op)) = rule.bytes_per_sec;
+        }
+    }
     rules_ = std::move(rules);
 }
 
@@ -292,6 +405,8 @@ LocalDirStore::FaultPlan LocalDirStore::plan_faults(StoreOp op) {
             case FaultAction::delay:
                 plan.delay += rule.delay;
                 break;
+            case FaultAction::bandwidth:
+                break;  // свойство хранилища, см. set_faults и throttle_put
         }
     }
     if (plan.crash_before || plan.crash_after) {
@@ -416,7 +531,30 @@ Fd open_message(const std::filesystem::path& path, int64_t msg_id) {
 
 }  // namespace
 
-int64_t LocalDirStore::put_message(const std::filesystem::path& src) {
+void LocalDirStore::throttle_put(StoreOp op, uint64_t n) {
+    uint64_t rate = 0;
+    {
+        const std::lock_guard lock(mu_);
+        rate = bandwidth_.at(static_cast<size_t>(op));
+    }
+    if (rate == 0) {
+        return;
+    }
+    // Резерв времени в общей полосе: каждый блок занимает n / rate секунд после предыдущего.
+    // Сон идёт до конца своего резерва, поэтому параллельные заливки делят полосу.
+    using Clock = std::chrono::steady_clock;
+    const auto cost = std::chrono::nanoseconds{
+        static_cast<int64_t>(static_cast<long double>(n) * 1e9L / static_cast<long double>(rate))};
+    Clock::time_point until;
+    {
+        const std::lock_guard lock(bandwidth_mu_);
+        bandwidth_free_ = std::max(bandwidth_free_, Clock::now()) + cost;
+        until = bandwidth_free_;
+    }
+    std::this_thread::sleep_until(until);
+}
+
+int64_t LocalDirStore::put_message(const std::filesystem::path& src, StoreOp op) {
     // Источник открывается до выделения id: его отсутствие не должно оставлять дырку.
     const Fd in = Fd::open(src, O_RDONLY);
     int64_t id = 0;
@@ -425,19 +563,19 @@ int64_t LocalDirStore::put_message(const std::filesystem::path& src) {
         id = load_next_id_locked();
         write_file_atomic(dir_ / "next_id", as_bytes(format_next_id(id + 1)));
     }
-    copy_file_durable(in, msg_path(id));
+    copy_file_durable(in, msg_path(id), [&](uint64_t n) { throttle_put(op, n); });
     return id;
 }
 
 ChunkRef LocalDirStore::put_chunk(const std::filesystem::path& encrypted_file) {
     return run_op(StoreOp::put_chunk, [&] {
-        const int64_t id = put_message(encrypted_file);
+        const int64_t id = put_message(encrypted_file, StoreOp::put_chunk);
         return ChunkRef{.msg_id = id, .remote_file_id = "local:" + std::to_string(id)};
     });
 }
 
 int64_t LocalDirStore::put_index(const std::filesystem::path& blob) {
-    return run_op(StoreOp::put_index, [&] { return put_message(blob); });
+    return run_op(StoreOp::put_index, [&] { return put_message(blob, StoreOp::put_index); });
 }
 
 void LocalDirStore::read_range(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out) {
@@ -454,6 +592,7 @@ void LocalDirStore::read_range(const ChunkRef& ref, uint64_t offset, std::span<s
             throw_store(StoreErrorKind::permanent,
                         "short read of message " + std::to_string(ref.msg_id));
         }
+        count_read(out.size());
     });
 }
 

@@ -16,9 +16,12 @@
 #include <chrono>
 #include <csignal>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <set>
+#include <sstream>
+#include <thread>
 
 #include "harness.h"
 
@@ -505,6 +508,87 @@ TEST_F(FuseTest, RemountKeepsDataAndAttributes) {
     EXPECT_TRUE(m->unmount().ok());
 }
 
+// Много мелких файлов: между инлайном (до 4 КиБ) и позиционным классом они лежат в пакетах
+// (SPEC 6.5), сообщений в канале заметно меньше, чем файлов; после перемонтирования, на «другой
+// машине» и после правок часть файлов (перезапись, рост до позиционного, удаление) читается верно.
+TEST_F(FuseTest, ManySmallFilesLiveInPacksAndSurviveRemount) {
+    Env& e = start();  // chunk_size 1 МиБ: pack_threshold 512 КиБ, pack_target 1 МиБ
+    constexpr int kFiles = 240;
+    const auto size_of = [](int i) -> uint64_t {
+        return 4'200 + static_cast<uint64_t>((i * 7919) % 90'000);  // 4,2..94 КБ, больше инлайна
+    };
+    const auto name_of = [](int i) {
+        return "d" + std::to_string(i % 8) + "/f" + std::to_string(i);
+    };
+    auto m = e.mount();
+    for (int d = 0; d < 8; ++d) {
+        ASSERT_EQ(::mkdir(m->path("d" + std::to_string(d)).c_str(), 0755), 0);
+    }
+    for (int i = 0; i < kFiles; ++i) {
+        write_file(m->path(name_of(i)), pattern(0, size_of(i), static_cast<uint64_t>(i) + 1));
+    }
+    write_file(m->path("tiny"), pattern(0, 100, 7));      // инлайн
+    write_pattern_file(m->path("big"), 3 * kMiB + 5, 8);  // позиционный
+    {
+        const File f = File::open(m->path("d0/f0"), O_RDONLY);
+        ASSERT_EQ(::fsync(f.fd()), 0);
+    }
+    const auto check = [&](Mount& mnt, const std::set<int>& skip,
+                           const std::map<int, uint64_t>& seeds) {
+        for (int i = 0; i < kFiles; ++i) {
+            if (skip.contains(i)) {
+                EXPECT_NE(::access(mnt.path(name_of(i)).c_str(), F_OK), 0) << i;
+                continue;
+            }
+            const uint64_t seed = seeds.contains(i) ? seeds.at(i) : static_cast<uint64_t>(i) + 1;
+            const uint64_t size = seeds.contains(i) ? 700'000 : size_of(i);
+            EXPECT_EQ(verify_pattern_file(mnt.path(name_of(i)), size, seed), "") << i;
+        }
+        EXPECT_EQ(verify_pattern_file(mnt.path("tiny"), 100, 7), "");
+        EXPECT_EQ(verify_pattern_file(mnt.path("big"), 3 * kMiB + 5, 8), "");
+    };
+    check(*m, {}, {});
+    ASSERT_TRUE(m->unmount().ok());
+
+    // Документов .bin в канале заметно меньше, чем файлов вне инлайна (SPEC 14, E2E M3).
+    const auto messages = [&] {
+        size_t n = 0;
+        for (const auto& de : fs::directory_iterator(e.local_dir() / "msgs")) {
+            (void)de;
+            ++n;
+        }
+        return n;
+    };
+    EXPECT_LT(messages(), static_cast<size_t>(kFiles) / 3);
+
+    m = e.mount();
+    check(*m, {}, {});
+    // Правки: удалить, перезаписать целиком, вырастить из пакета до позиционного класса.
+    std::set<int> removed;
+    std::map<int, uint64_t> regrown;
+    for (int i = 0; i < kFiles; i += 5) {
+        ASSERT_EQ(::unlink(m->path(name_of(i)).c_str()), 0);
+        removed.insert(i);
+    }
+    for (int i = 1; i < kFiles; i += 17) {
+        if (removed.contains(i)) {
+            continue;
+        }
+        write_pattern_file(m->path(name_of(i)), 700'000, 1000 + static_cast<uint64_t>(i));
+        regrown[i] = 1000 + static_cast<uint64_t>(i);
+    }
+    check(*m, removed, regrown);
+    ASSERT_TRUE(m->unmount().ok());
+
+    m = e.mount();
+    check(*m, removed, regrown);
+    ASSERT_TRUE(m->unmount().ok());
+    e.new_machine();
+    m = e.mount();
+    check(*m, removed, regrown);
+    EXPECT_TRUE(m->unmount().ok());
+}
+
 TEST_F(FuseTest, ReadOnlyMountRejectsChanges) {
     Env& e = start();
     auto m = e.mount();
@@ -699,6 +783,149 @@ INSTANTIATE_TEST_SUITE_P(
                       CrashCase{"SetHeadCrashAfter", "set_head:2:crash_after"},
                       CrashCase{"PutIndexCrashAfter", "put_index:2:crash_after"}),
     [](const ::testing::TestParamInfo<CrashCase>& p) { return std::string(p.param.name); });
+
+// --- обвязка: тест, убитый SIGKILL (ctest по таймауту), не оставляет демонов ---
+
+// Процесс жив (не зомби).
+bool alive_pid(pid_t pid) {
+    std::ifstream in("/proc/" + std::to_string(pid) + "/stat");
+    std::string line;
+    if (!in || !std::getline(in, line)) {
+        return false;
+    }
+    const auto rp = line.rfind(')');
+    return rp != std::string::npos && rp + 2 < line.size() && line[rp + 2] != 'Z' &&
+           line[rp + 2] != 'X';
+}
+
+struct Orphan {
+    pid_t test_pid = 0;  // убитый «тест»
+    fs::path root;
+    pid_t daemon = 0;
+    fs::path mount_dir;
+};
+
+// «Тест» в дочернем процессе: окружение, init, фоновое mount; сообщает корень и pid демона и
+// ждёт SIGKILL. no_watchdog — без сторожа (проверка того, что сам сторож что-то делает).
+Orphan run_victim(const fs::path& base, bool no_watchdog) {
+    std::array<int, 2> fds{};
+    EXPECT_EQ(::pipe2(fds.data(), O_CLOEXEC), 0);
+    const pid_t child = ::fork();
+    if (child == 0) {
+        ::close(fds[0]);
+        if (no_watchdog) {
+            ::setenv("TELEGA_ITEST_NO_WATCHDOG", "1", 1);  // NOLINT(concurrency-mt-unsafe)
+        }
+        try {
+            Env e(ProfileSpec{}, base);
+            e.init();
+            auto m = e.mount();
+            const std::string msg = e.root().string() + "\n" + std::to_string(m->pid()) + "\n" +
+                                    m->dir().string() + "\n";
+            const ssize_t sent = ::write(fds[1], msg.data(), msg.size());
+            (void)sent;
+            for (;;) {
+                ::pause();
+            }
+        } catch (...) {
+            ::_exit(2);
+        }
+    }
+    ::close(fds[1]);
+    std::string data;
+    std::array<char, 256> buf{};
+    while (std::count(data.begin(), data.end(), '\n') < 3) {
+        const ssize_t n = ::read(fds[0], buf.data(), buf.size());
+        if (n <= 0) {
+            break;
+        }
+        data.append(buf.data(), static_cast<size_t>(n));
+    }
+    ::close(fds[0]);
+    Orphan o;
+    o.test_pid = child;
+    std::istringstream in{data};
+    std::string root;
+    std::string pid;
+    std::string dir;
+    std::getline(in, root);
+    std::getline(in, pid);
+    std::getline(in, dir);
+    EXPECT_FALSE(pid.empty()) << "the victim did not start";
+    o.root = root;
+    o.daemon = pid.empty() ? 0 : static_cast<pid_t>(std::stol(pid));
+    o.mount_dir = dir;
+    return o;
+}
+
+void kill_victim(const Orphan& o) {
+    ::kill(o.test_pid, SIGKILL);
+    int status = 0;
+    ::waitpid(o.test_pid, &status, 0);
+}
+
+template <class P>
+bool wait_until(P pred, std::chrono::seconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!pred()) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(50ms);
+    }
+    return true;
+}
+
+fs::path make_base() {
+    std::string pattern = (fs::temp_directory_path() / "tgfs-it-base-XXXXXX").string();
+    EXPECT_NE(::mkdtemp(pattern.data()), nullptr);
+    return fs::canonical(pattern);
+}
+
+TEST(FuseWatchdog, TestKilledBySigkillLeavesNoDaemonNoMountNoDirectory) {
+    if (const std::string why = fuse_skip_reason(); !why.empty()) {
+        GTEST_SKIP() << why;
+    }
+    const fs::path base = make_base();
+    const Orphan o = run_victim(base, false);
+    ASSERT_GT(o.daemon, 0);
+    ASSERT_TRUE(is_mounted(o.mount_dir));
+    ASSERT_TRUE(alive_pid(o.daemon));
+    kill_victim(o);
+    // Демон, монтирование и корень окружения исчезают сами, без участия следующего теста.
+    EXPECT_TRUE(wait_until([&] { return !alive_pid(o.daemon); }, 30s)) << "the daemon is orphaned";
+    EXPECT_TRUE(wait_until([&] { return !is_mounted(o.mount_dir); }, 30s));
+    EXPECT_TRUE(wait_until([&] { return !fs::exists(o.root); }, 30s));
+    std::error_code ec;
+    fs::remove_all(base, ec);
+}
+
+// Окружение убитого теста без сторожа убирает следующий Env в той же базе: только по файлу
+// владельца и только если владелец мёртв; окружение живого владельца остаётся нетронутым.
+TEST(FuseWatchdog, NextEnvSweepsOrphansOfDeadOwnersOnlyInItsOwnBase) {
+    if (const std::string why = fuse_skip_reason(); !why.empty()) {
+        GTEST_SKIP() << why;
+    }
+    const fs::path base = make_base();
+    const Orphan dead = run_victim(base, true);
+    ASSERT_GT(dead.daemon, 0);
+    kill_victim(dead);
+    ASSERT_TRUE(alive_pid(dead.daemon)) << "without the watchdog the daemon survives its test";
+    // Чужое: каталог без файла владельца и каталог живого владельца той же базы.
+    const fs::path foreign = base / "tgfs-it-foreign";
+    fs::create_directories(foreign);
+    const Env alive_env{ProfileSpec{}, base};
+    {
+        const Env next{ProfileSpec{}, base};  // уборка при создании
+        EXPECT_FALSE(fs::exists(dead.root));
+        EXPECT_TRUE(wait_until([&] { return !alive_pid(dead.daemon); }, 30s));
+        EXPECT_FALSE(is_mounted(dead.mount_dir));
+        EXPECT_TRUE(fs::exists(foreign));
+        EXPECT_TRUE(fs::exists(alive_env.root()));
+    }
+    std::error_code ec;
+    fs::remove_all(base, ec);
+}
 
 }  // namespace
 }  // namespace telega::itest

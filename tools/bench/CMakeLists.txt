@@ -13,6 +13,7 @@ target_include_directories(tgfs_bench_corpora PUBLIC "${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(tgfs_bench_corpora PUBLIC tgfs_bench_common)
 
 add_subdirectory(e1)
+add_subdirectory(e11)
 add_subdirectory(e8)
 add_subdirectory(sim)
 add_subdirectory(tdbench)

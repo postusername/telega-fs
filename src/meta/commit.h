@@ -10,12 +10,16 @@
 //   head_hash, chain, pending_patchsets, force_snapshot, index_dirty). В памяти лежат только
 //   флаги для фонового потока и кэш base_generation для Vfs;
 // - Store вызывается только без блокировки MetaStore (SPEC 9): под ней делаются лишь забор
-//   патча / VACUUM INTO (шаг 2) и вычисление index_dirty (шаг 8). Запись забранного патча в
-//   pending_patchsets идёт после того, как блокировка MetaStore отпущена (SPEC 6.6);
+//   патча / фиксация среза снимка (шаг 2) и вычисление index_dirty (шаг 8). Запись забранного
+//   патча в pending_patchsets идёт после того, как блокировка MetaStore отпущена (SPEC 6.6).
+//   Копия снимка (backup, VACUUM INTO) снимается уже без блокировки (SPEC 6.6, «Снимок без
+//   блокировки записи»);
 // - порядок патчей в pending_patchsets совпадает с порядком забора: каждый забор (коммит или
 //   промежуточный) берёт patch_queue_mu_ до захвата MetaStore и держит его до конца записи
-//   патча (и до чтения pending у коммита). Снимок держит его на время VACUUM INTO, чтобы ни
-//   один забранный до него патч не лёг в pending позже и не повторил уже вошедшее в снимок;
+//   патча (и до чтения pending у коммита). Снимок держит его только на время фиксации среза и
+//   чтения max_pending_seq (доли миллисекунды): патч, забранный до среза, успевает лечь в
+//   pending (его строки в срезе, шаг 8 его удалит), забранный после — уже не входит в снимок
+//   и переживёт шаг 8;
 // - промежуточный забор (SPEC 6.6): фоновый поток забирает патч в pending_patchsets, когда
 //   MetaStore насчитал patch_take_rows изменённых строк. Он идёт и во время заливки блоба,
 //   поэтому коммит склеивает и удаляет только свои патчи (по seq);
@@ -90,6 +94,10 @@ inline constexpr int kDeltaZstdLevel = 3;
 // монтирование узнаёт свой снимок, если процесс упал между pin и записью state.sqlite.
 std::filesystem::path snapshot_tmp_path(const std::filesystem::path& tmp_dir, uint64_t generation);
 
+// Сырая копия среза до VACUUM INTO: tmp/index-<generation>.sqlite.raw (SPEC 6.6). Живёт только
+// во время копирования; после сбоя её убирает cleanup_tmp монтирования (префикс «index-»).
+std::filesystem::path snapshot_raw_path(const std::filesystem::path& tmp_dir, uint64_t generation);
+
 // Поставить на MetaStore dirty-хук (SPEC 6.6): долговечно index_dirty = 1 в state.sqlite,
 // затем extra (если задан). Хук вызывается под мьютексом MetaStore.
 void install_dirty_hook(MetaStore& meta, StateStore& state, std::function<void()> extra = {});
@@ -139,6 +147,12 @@ struct CommitConfig {
     // Тестовый хук: вызывается после отпускания блокировки MetaStore, перед записью забранного
     // патча в pending_patchsets (под patch_queue_mu_). Исключение считается сбоем записи.
     std::function<void()> before_append_pending;
+    // Тестовый хук: коммит выбрал дельту и ещё не взял patch_queue_mu_ (щель, в которой фоновый
+    // промежуточный забор может поставить force_snapshot).
+    std::function<void()> before_patch_queue;
+    // Тестовый хук снимка (snapshot.h): перед backup (срез зафиксирован, блокировки отпущены) и
+    // перед VACUUM INTO копии. Исключение — сбой этапа (ставит force_snapshot).
+    SnapshotHook snapshot_hook;
     Clock* clock = nullptr;  // nullptr — steady_clock()
 };
 
@@ -152,8 +166,12 @@ struct CommitMetrics {
     size_t compressed_bytes = 0;  // после zstd
     size_t blob_bytes = 0;        // блоб целиком: 256 + body
     size_t pending_merged = 0;    // сколько pending_patchsets склеено в дельту
-    TakeStats take;  // забор патча под блокировкой (дельта)
-    std::chrono::nanoseconds vacuum{0};  // VACUUM INTO под блокировкой (снимок)
+    TakeStats take;  // забор патча (дельта) или фиксация среза (снимок) под блокировкой
+    // Снимок: удержание блокировки MetaStore и очереди патчей на фиксации среза (take.locked —
+    // только мьютекс MetaStore), копирование через backup и VACUUM INTO копии (оба без блокировки).
+    std::chrono::nanoseconds snapshot_hold{0};
+    std::chrono::nanoseconds snapshot_backup{0};
+    std::chrono::nanoseconds vacuum{0};
     std::chrono::nanoseconds compress{0};
     std::chrono::nanoseconds encrypt{0};
     std::chrono::nanoseconds upload{0};  // CAS + put_index + set_head
@@ -243,6 +261,10 @@ class CommitManager final : public Committer {
         // false: pin точно не прошёл (set_head вернул permanent). Тогда кэш TDLib ничего не
         // скрывает, и неподтверждённая попытка разбирается одним чтением головы (SPEC 7.1).
         bool pin_may_have_passed = true;
+        // Эпоха force_snapshot на момент среза (только снимок): флаг, поставленный после среза
+        // (промежуточный забор во время копии не смог сохранить патч), снимок не покрывает, и
+        // шаг 8 его не сбрасывает.
+        uint64_t force_epoch = 0;
     };
     struct CasExpect {
         std::optional<int64_t> msg_id;  // nullopt — канал пуст (первый коммит после init)
@@ -254,7 +276,10 @@ class CommitManager final : public Committer {
         int64_t msg_id = 0;
     };
 
-    CommitResult commit_locked(bool force_snapshot);
+    // Одна попытка коммита под commit_mu_. restart_as_snapshot = true: выбранная дельта отменена до
+    // забора патча (force_snapshot поставили после выбора вида блоба), нужна новая попытка
+    // с force_snapshot = true.
+    CommitResult commit_attempt(bool force_snapshot, bool& restart_as_snapshot);
     bool index_changed();
     void finish_commit(const Uploaded& up);                // шаг 8
     void gc(uint64_t generation, CommitMetrics& metrics);  // шаг 9
@@ -298,6 +323,12 @@ class CommitManager final : public Committer {
     // Дублирует force_snapshot, если его не удалось записать; может поставить и сбой записи
     // патча при промежуточном заборе.
     std::atomic<bool> force_next_snapshot_{false};
+    // Эпоха флага: растёт при каждой постановке (mark_force_snapshot, set_cas_override).
+    // Снимок запоминает её при срезе и сбрасывает флаг, только если она не изменилась. force_mu_
+    // делает «поставить флаг» и «проверить эпоху и сбросить» неделимыми. Порядок блокировок:
+    // commit_mu_ → patch_queue_mu_ → force_mu_ → MetaStore → StateStore.
+    std::atomic<uint64_t> force_epoch_{0};
+    std::mutex force_mu_;
 
     // Очередь патчей: порядок забора = порядок записи в pending_patchsets (см. начало файла).
     std::mutex patch_queue_mu_;

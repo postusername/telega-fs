@@ -5,7 +5,7 @@
 // Устройство:
 // - одно писательское соединение под мьютексом; на нём всегда открыта сессия session
 //   extension, подключённая ко всем таблицам. Из неё коммит забирает patchset (дельта) или
-//   после VACUUM INTO (снимок) просто пересоздаёт её;
+//   при фиксации среза снимка (cut_snapshot) просто пересоздаёт её;
 // - читательские соединения только для чтения, по одному на поток (WAL позволяет читать
 //   параллельно с писателем). Соединение потока создаётся при первом read и живёт до
 //   уничтожения MetaStore;
@@ -17,8 +17,13 @@
 //   уборкой) хук не вызывают, но попадают в сессию.
 //
 // Порядок блокировок (SPEC 9): мьютекс MetaStore берётся раньше блокировок overlay и
-// StateStore. Вызывать Store под ним НЕ ДОПУСКАЕТСЯ. Мьютекс рекурсивный: внутри with_lock
-// можно звать write, take_patchset и vacuum_into; внутри write — нельзя (logic_error).
+// StateStore. Вызывать Store под ним НЕ ДОПУСКАЕТСЯ. Мьютекс рекурсивный и честный (FIFO,
+// fair_mutex.h): внутри with_lock можно звать write, take_patchset и cut_snapshot; внутри
+// write — нельзя (logic_error).
+//
+// Снимок индекса (SPEC 6.6, «Снимок без блокировки записи»): под мьютексом только cut_snapshot
+// (пересоздание сессии и фиксация среза читательской транзакцией), копирование идёт после
+// блокировки через SnapshotCopy (snapshot.h).
 
 #include <atomic>
 #include <chrono>
@@ -38,11 +43,17 @@
 
 #include "common/bytes.h"
 #include "meta/errors.h"
+#include "meta/fair_mutex.h"
+#include "meta/snapshot.h"
 #include "meta/sqlite.h"
 
 namespace telega::meta {
 
 inline constexpr int64_t kFormatVersion = 1;
+
+// PRAGMA journal_size_limit писательского соединения (SPEC 6.6): пока идёт копирование среза,
+// контрольная точка WAL стоит, и файл растёт на объём записей; лимит усекает его после неё.
+inline constexpr int64_t kJournalSizeLimit = 64LL << 20;
 
 // Параметры init (SPEC 12.2): пишутся в meta и потом не меняются.
 struct InitParams {
@@ -90,8 +101,8 @@ class MetaStore {
 
     // Выполнить fn(Db& writer) под мьютексом в транзакции BEGIN IMMEDIATE и закоммитить.
     // Исключение из fn — ROLLBACK и проброс. Для kind = user перед первой записью после
-    // take_patchset/vacuum_into (или открытия) вызывается dirty-хук (его исключение отменяет
-    // запись) и выставляется dirty_since_take.
+    // take_patchset/cut_snapshot/vacuum_into (или открытия) вызывается dirty-хук (его исключение
+    // отменяет запись) и выставляется dirty_since_take.
     template <typename F>
     auto write(F&& fn, WriteKind kind = WriteKind::user) -> std::invoke_result_t<F&, Db&> {
         using R = std::invoke_result_t<F&, Db&>;
@@ -133,6 +144,9 @@ class MetaStore {
         return fn();
     }
 
+    // Сколько потоков стоит в очереди на мьютекс записи (тесты честности, диагностика).
+    [[nodiscard]] uint64_t lock_waiters() const { return mutex_.waiting(); }
+
     // Забрать patchset сессии и пересоздать её, сбросить dirty_since_take и счётчик строк
     // (SPEC 7.1, шаг 2). Пустой результат — изменений не было. stats, если задан, получает время
     // ожидания и удержания мьютекса и размер патча. Запись патча в pending_patchsets делает
@@ -140,8 +154,8 @@ class MetaStore {
     Bytes take_patchset(TakeStats* stats = nullptr);
 
     // Сколько строк изменено удачными записями (user и housekeeping) с последнего
-    // take_patchset/vacuum_into (SPEC 6.6, промежуточный забор). Оценка сверху: одна строка,
-    // изменённая дважды, считается дважды.
+    // take_patchset/cut_snapshot/vacuum_into (SPEC 6.6, промежуточный забор). Оценка сверху: одна
+    // строка, изменённая дважды, считается дважды.
     [[nodiscard]] int64_t rows_since_take() const noexcept { return rows_.load(); }
 
     // Хук порога: вызывается под мьютексом, когда rows_since_take() переходит через threshold
@@ -149,11 +163,25 @@ class MetaStore {
     // MetaStore.
     void set_rows_hook(int64_t threshold, std::function<void()> hook);
 
-    // VACUUM INTO path (path не должен существовать), пересоздать сессию, сбросить
-    // dirty_since_take (SPEC 7.1, шаг 2, снимок). Результат может быть не в WAL-режиме.
+    // Фиксация среза снимка (SPEC 6.6, 7.1 шаг 2): под мьютексом пересоздать сессию БЕЗ забора
+    // патча (строки сессии уже в срезе), сбросить dirty_since_take и счётчик строк и на
+    // читательском соединении снимка выполнить BEGIN с чтением страницы. Срез приходится ровно на
+    // точку пересоздания сессии: записи после неё попадут в новую сессию, то есть в следующую
+    // дельту. Время под мьютексом не зависит от размера индекса. Читательская транзакция
+    // остаётся открытой: закрыть её (SnapshotCopy::copy или SnapshotReader::end) обязан
+    // вызывающий. Ошибка — исключение, в этом случае сессия и счётчики не тронуты, транзакция
+    // закрыта. Вызывать из write нельзя (logic_error). stats, если задан, получает ожидание и
+    // удержание мьютекса (patch_bytes = 0). Запись патча не делается: при сбое снимка
+    // вызывающий ставит force_snapshot (SPEC 7.1).
+    void cut_snapshot(SnapshotReader& reader, TakeStats* stats = nullptr);
+
+    // VACUUM INTO path под мьютексом (path не должен существовать), пересоздать сессию, сбросить
+    // dirty_since_take. Держит блокировку на всё время копии (около 4 с на 1M инодов), поэтому
+    // коммит его не использует (SPEC 6.6: вместо него cut_snapshot и SnapshotCopy); остаётся
+    // для тестов и инструментов. Результат может быть не в WAL-режиме.
     void vacuum_into(const std::filesystem::path& path);
 
-    // Была ли пользовательская запись после последнего take_patchset/vacuum_into.
+    // Была ли пользовательская запись после последнего take_patchset/cut_snapshot/vacuum_into.
     [[nodiscard]] bool dirty_since_take() const noexcept { return dirty_.load(); }
 
     [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
@@ -191,7 +219,7 @@ class MetaStore {
 
     std::filesystem::path path_;
 
-    std::recursive_mutex mutex_;  // писательское соединение, сессия, хук
+    FairRecursiveMutex mutex_;  // писательское соединение, сессия, хук; честный (SPEC 9)
     std::unique_ptr<Db> writer_;
     std::unique_ptr<Session> session_;  // уничтожается раньше writer_
     DirtyHook dirty_hook_;
