@@ -22,12 +22,15 @@ endforeach()
 add_executable(telega_integration_tests
     harness.cpp
     fuse_test.cpp
+    ctl_test.cpp
+    recovery_test.cpp
     fsx_fuse_test.cpp
     resources_test.cpp)
 # telega_store — чтение файла stats LocalDirStore (read_store_stats), telega_crypto — sha256 из
 # libsodium. Оба без TDLib.
 target_link_libraries(telega_integration_tests PRIVATE
-    tgfs_fsx telega_store telega_crypto telega_options GTest::gtest_main)
+    tgfs_fsx telega_store telega_crypto telega_options nlohmann_json::nlohmann_json
+    GTest::gtest_main)
 # Тяжёлые данные приёмки M3 — в каталоге сборки (на большом диске), а не в /tmp.
 target_compile_definitions(telega_integration_tests PRIVATE
     TELEGA_FS_BINARY="$<TARGET_FILE:telega-fs>"

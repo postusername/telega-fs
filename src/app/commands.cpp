@@ -25,6 +25,8 @@
 
 #include "app/cli_util.h"
 #include "app/config.h"
+#include "app/ctl_handlers.h"
+#include "app/ctl_socket.h"
 #include "app/telegram_cmds.h"
 #include "app/tg_session.h"
 #include "common/bytes.h"
@@ -232,6 +234,9 @@ int serve(MountContext& ctx, Ready& ready) {
     store::Store* store = nullptr;
     std::unique_ptr<meta::MountedFs> mounted;
     std::unique_ptr<vfs::Vfs> vfs;
+    // Управляющий сокет (SPEC 12.4): уничтожается раньше vfs и mounted, на которые ссылаются его
+    // обработчики. Начало размонтирования (begin_stop) идёт из Teardown, до остановки Vfs.
+    std::unique_ptr<CtlServer> ctl;
     Teardown teardown;
     meta::MountOptions mo;
     // Копии пароля живут в этом процессе (у ребёнка после fork — свои): затираются, как только
@@ -327,11 +332,21 @@ int serve(MountContext& ctx, Ready& ready) {
         fo.mount_options = mount_options;
         fo.read_only = ctx.args.read_only;
         // Frontend объявлен после vfs и mounted: уничтожается раньше них.
-        fuse::Frontend frontend{*vfs, fo, [&] { teardown.run(vfs.get(), mounted.get()); }};
+        ctl = std::make_unique<CtlServer>(
+            ctx.loaded.paths.ctl_sock(),
+            make_mount_handlers(*vfs, *mounted, ctx.loaded.paths, ctx.args.read_only));
+        fuse::Frontend frontend{*vfs, fo, [&, c = ctl.get()] {
+                                    c->begin_stop();
+                                    teardown.run(vfs.get(), mounted.get());
+                                }};
         frontend.mount();
         spdlog::info("mounted {} (profile '{}')", fo.mountpoint.string(), ctx.args.global.profile);
+        // lock у нас с mount_impl: оставшийся от упавшего процесса сокет удаляется здесь.
+        // Сокет создаётся до ready.ok(), поэтому после возврата `telega-fs mount` он уже есть.
+        ctl->start();
         ready.ok();
         frontend.serve();
+        ctl->begin_stop();  // сокет не должен пережить размонтирование (SPEC 12.4)
         frontend.close();
         teardown.run(vfs.get(), mounted.get());
         return teardown.failed() ? 1 : 0;
@@ -339,6 +354,9 @@ int serve(MountContext& ctx, Ready& ready) {
         wipe_passphrase();
         const std::string text = describe_exception(e);
         spdlog::error("mount failed: {}", text);
+        if (ctl) {
+            ctl->begin_stop();
+        }
         teardown.run(vfs.get(), mounted.get());
         ready.fail(text);
         return 1;

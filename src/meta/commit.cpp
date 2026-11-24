@@ -59,13 +59,17 @@ const char* kind_name(crypto::BlobKind kind) {
 }
 
 // Голова канала совпадает с ожидаемой (SPEC 7.1, шаг 4)?
+// foreign: ожидается чужое сообщение (потеря головы, SPEC 7.2), сверяется только msg_id.
 bool head_matches(const std::optional<store::HeadInfo>& head, std::optional<int64_t> msg_id,
-                  uint64_t generation) {
+                  uint64_t generation, bool foreign = false) {
     if (!msg_id) {
         return !head.has_value();
     }
     if (!head || head->msg_id != *msg_id) {
         return false;
+    }
+    if (foreign) {
+        return true;
     }
     try {
         return crypto::parse_index_header(head->header).generation == generation;
@@ -244,7 +248,15 @@ void CommitManager::poke() { cv_.notify_all(); }
 
 void CommitManager::set_cas_override(int64_t head_msg_id, uint64_t head_generation) {
     const std::lock_guard lock(commit_mu_);
-    cas_override_ = CasExpect{head_msg_id, head_generation};
+    cas_override_ = CasExpect{head_msg_id, head_generation, false};
+    const std::lock_guard force(force_mu_);
+    force_epoch_.fetch_add(1);
+    force_next_snapshot_ = true;
+}
+
+void CommitManager::set_cas_override_lost_head(std::optional<int64_t> foreign_msg_id) {
+    const std::lock_guard lock(commit_mu_);
+    cas_override_ = CasExpect{foreign_msg_id, 0, foreign_msg_id.has_value()};
     const std::lock_guard force(force_mu_);
     force_epoch_.fetch_add(1);
     force_next_snapshot_ = true;
@@ -428,8 +440,10 @@ bool CommitManager::sleep_for(std::chrono::milliseconds d) {
 // (404) или более старый блоб этой же ФС. Чужой блоб или более новое поколение — не кэш.
 bool CommitManager::is_stale_own_head(const std::optional<store::HeadInfo>& head,
                                       const CasExpect& expect) const {
-    if (!expect.msg_id) {
-        return false;  // первый коммит после init: до него своего pin не было
+    if (!expect.msg_id || expect.foreign) {
+        // Первый коммит после init или --force-local при потере головы: ждали «головы нет» или
+        // чужое сообщение, своего pin до этого не было. Окно 90 с монтирование уже выдержало.
+        return false;
     }
     if (!head) {
         return true;
@@ -443,6 +457,10 @@ bool CommitManager::is_stale_own_head(const std::optional<store::HeadInfo>& head
     } catch (const crypto::CorruptError&) {
         return false;
     }
+}
+
+bool CommitManager::matches(const std::optional<store::HeadInfo>& head, const CasExpect& expect) {
+    return head_matches(head, expect.msg_id, expect.generation, expect.foreign);
 }
 
 bool CommitManager::cas_with_retry(const std::optional<store::HeadInfo>& first,
@@ -463,7 +481,7 @@ bool CommitManager::cas_with_retry(const std::optional<store::HeadInfo>& first,
             throw std::runtime_error("commit interrupted by shutdown while waiting for the head");
         }
         head = store_.read_head();
-        if (head_matches(head, expect.msg_id, expect.generation)) {
+        if (matches(head, expect)) {
             return true;
         }
         if (!is_stale_own_head(head, expect)) {
@@ -657,6 +675,7 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
                     Bytes patch;
                     meta_.with_lock([&] {
                         patch = meta_.take_patchset(&m.take);
+                        up.take_ns = wall_ns();  // SPEC 6.4: committed_take_ns
                         if (!patch.empty() || had_pending) {
                             // Записи после забора попадут в следующий блоб: чанк, умерший в них,
                             // ещё жив в поколении G+1 (dead_since_gen, SPEC 7.4).
@@ -717,6 +736,7 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
                     const auto t = SteadyClock::now();
                     meta_.with_lock([&] {
                         meta_.cut_snapshot(copy.reader(), &m.take);
+                        up.take_ns = wall_ns();  // SPEC 6.4: committed_take_ns
                         // С этого момента сессия пересоздана без патча: сбой снимка означает
                         // force_snapshot.
                         snapshot_taken = true;
@@ -744,8 +764,8 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
         m.compressed_bytes = compressed.size();
         raw = Bytes{};
 
-        const CasExpect expect =
-            cas_override_.value_or(CasExpect{h != 0 ? std::optional<int64_t>{h} : std::nullopt, g});
+        const CasExpect expect = cas_override_.value_or(
+            CasExpect{h != 0 ? std::optional<int64_t>{h} : std::nullopt, g, false});
         crypto::IndexHeader header;
         header.kind = kind;
         header.fs_uuid = keys_.fs_uuid;
@@ -761,7 +781,8 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
             header.snapshot_gen = up.generation;
             header.snapshot_msg_id = 0;
         }
-        header.prev_msg_id = expect.msg_id.value_or(0);
+        // Чужое сообщение не бывшая голова: prev_msg_id = 0, как и при пустой голове.
+        header.prev_msg_id = expect.foreign ? 0 : expect.msg_id.value_or(0);
         header.kdf = keys_.kdf;
         header.wrapped_master = keys_.wrapped_master;
         t = SteadyClock::now();
@@ -775,8 +796,7 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
         // Шаг 4: CAS по голове канала.
         t = SteadyClock::now();
         const auto head = store_.read_head();
-        if (!head_matches(head, expect.msg_id, expect.generation) &&
-            !cas_with_retry(head, expect)) {
+        if (!matches(head, expect) && !cas_with_retry(head, expect)) {
             read_only_.store(true);
             const std::string what = "the channel head changed under us (expected generation " +
                                      std::to_string(expect.generation) +
@@ -802,7 +822,8 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
         m.msg_id = up.msg_id;
         remove_quietly(blob_path);
         try {
-            store_.set_head(up.msg_id, expect.msg_id);
+            // Чужое сообщение шаг 7 не открепляет (SPEC 7.2, --force-local).
+            store_.set_head(up.msg_id, expect.foreign ? std::nullopt : expect.msg_id);
             last_pin_ = clock_.now();
         } catch (const store::StoreError& e) {
             // Окончательная ошибка: pin не прошёл, ждать кэш TDLib незачем (SPEC 7.1). Иначе pin
@@ -852,7 +873,9 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
 
     // Шаг 9.
     try {
-        gc(up.generation, m);
+        if (!config_.skip_gc) {
+            gc(up.generation, m);
+        }
     } catch (const store::CrashInjected&) {
         throw;
     } catch (const std::exception& e) {
@@ -897,6 +920,9 @@ void CommitManager::finish_commit(const Uploaded& up) {
             state_.set_int(state_key::base_generation, static_cast<int64_t>(up.generation));
             state_.set_int(state_key::head_msg_id, up.msg_id);
             state_.set_blob(state_key::head_hash, up.hash);
+            if (up.take_ns != 0) {
+                state_.set_int(state_key::committed_take_ns, up.take_ns);
+            }
             // Только включённые патчи: промежуточный забор мог дописать новые, пока шёл коммит.
             state_.delete_pending_upto(up.max_pending_seq);
             if (up.kind == crypto::BlobKind::delta) {
@@ -940,6 +966,19 @@ void CommitManager::finish_commit(const Uploaded& up) {
 void CommitManager::gc(uint64_t generation, CommitMetrics& metrics) {
     metrics.gc_chunks_deleted = gc_chunks(generation);
     metrics.gc_blobs_deleted = gc_blobs(generation);
+}
+
+CommitManager::GcResult CommitManager::collect_garbage() {
+    const std::lock_guard lock(commit_mu_);
+    CommitMetrics metrics;
+    try {
+        gc(static_cast<uint64_t>(state_.get_int_or(state_key::base_generation, 0)), metrics);
+    } catch (const store::CrashInjected&) {
+        throw;
+    } catch (const std::exception& e) {
+        throw CommitError(std::string("gc failed: ") + e.what());
+    }
+    return {metrics.gc_chunks_deleted, metrics.gc_blobs_deleted};
 }
 
 // Порядок для чанка: (1) запись в upload_journal (chunk_id, msg_id) — долговечное намерение;

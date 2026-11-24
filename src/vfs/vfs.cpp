@@ -917,6 +917,7 @@ VfsStatus Vfs::status() {
     s.staging_used = budget_->used();
     s.staging_limit = budget_->config().limit;
     s.uploaded_chunks = uploaded_.load();
+    s.deduped_chunks = deduped_.load();
     s.fatal = fatal_.load();
     const std::lock_guard lock(err_mu_);
     s.last_error = last_error_;

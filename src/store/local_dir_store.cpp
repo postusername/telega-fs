@@ -630,6 +630,18 @@ void LocalDirStore::delete_messages(std::span<const int64_t> msg_ids) {
     });
 }
 
+std::vector<bool> LocalDirStore::messages_exist(std::span<const int64_t> msg_ids) {
+    // Без правил сбоев и без счётчика вызовов: служебная проверка fsck не должна сдвигать номера
+    // вызовов Store в тестах инъекции.
+    std::vector<bool> out;
+    out.reserve(msg_ids.size());
+    for (const int64_t id : msg_ids) {
+        std::error_code ec;
+        out.push_back(std::filesystem::exists(msg_path(id), ec));
+    }
+    return out;
+}
+
 std::optional<HeadInfo> LocalDirStore::read_head() {
     return run_op(StoreOp::read_head, [&]() -> std::optional<HeadInfo> {
         // Под mu_, чтобы закреплённое не удалили между выбором головы и чтением заголовка;

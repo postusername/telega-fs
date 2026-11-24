@@ -25,6 +25,10 @@ telega_module_tests(telega_app_tests telega_config
 telega_module_tests(telega_app_cmd_tests telega_core
     unit/app/telegram_cmds_test.cpp)
 
+# Управляющий сокет и status (SPEC 12.3, 12.4).
+telega_module_tests(telega_ctl_tests telega_core
+    unit/app/ctl_test.cpp)
+
 telega_module_tests(telega_crypto_tests telega_crypto
     unit/crypto/keys_test.cpp
     unit/crypto/chunk_test.cpp
@@ -60,6 +64,7 @@ telega_module_tests(telega_meta_tests telega_meta
 telega_module_tests(telega_commit_tests telega_commit
     unit/commit/commit_test.cpp
     unit/commit/mount_test.cpp
+    unit/commit/head_loss_test.cpp
     unit/commit/keyring_flow_test.cpp
     unit/commit/commit_timing_test.cpp
     unit/commit/fault_test.cpp
@@ -75,12 +80,24 @@ telega_module_tests(telega_vfs_tests telega_vfs
     unit/vfs/vfs_pack_test.cpp
     unit/vfs/chunk_reader_deadline_test.cpp
     unit/vfs/vfs_readahead_test.cpp
-    unit/vfs/vfs_staging_test.cpp)
+    unit/vfs/vfs_staging_test.cpp
+    unit/vfs/vfs_dedup_test.cpp)
 
 # Падение на каждом шаге заливки и применения пакета: настоящее монтирование и Vfs поверх него.
 telega_module_tests(telega_pack_fault_tests telega_vfs
     unit/vfs/pack_fault_test.cpp)
 target_link_libraries(telega_pack_fault_tests PRIVATE telega_commit)
+
+# Восстановление: fsck и recover --export-dirty. Настоящее монтирование и Vfs поверх него.
+telega_module_tests(telega_recovery_tests telega_vfs
+    unit/commit/fsck_test.cpp
+    unit/commit/export_dirty_test.cpp)
+target_link_libraries(telega_recovery_tests PRIVATE telega_commit)
+
+# Дедупликация чанков и отложенная уборка: настоящее монтирование и Vfs поверх него.
+telega_module_tests(telega_dedup_commit_tests telega_vfs
+    unit/vfs/dedup_commit_test.cpp)
+target_link_libraries(telega_dedup_commit_tests PRIVATE telega_commit)
 
 # Vfs поверх TelegramStore на фейковом транспорте TDLib.
 telega_module_tests(telega_vfs_tg_tests telega_vfs

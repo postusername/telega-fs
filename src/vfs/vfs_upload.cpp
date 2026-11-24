@@ -4,8 +4,9 @@
 // Загрузка позиционного чанка (upload_chunk) идёт в три фазы (а позиция ≥ 1 инлайн-файла,
 // пока его позиция 0 ещё в overlay, не загружается вовсе, см. «блокировку» ниже):
 // 1. Под разделяемой полосой inode (запись в файл ждёт, чтение идёт): запомнить version,
-//    выделить chunk_id, посчитать content_mac и зашифровать staging в tmp/. Снимок
-//    согласован: писатели держат полосу исключительно.
+//    посчитать content_mac; если в chunks уже есть такой позиционный чанк (дедупликация,
+//    SPEC 8.1, шаг 2), шифрование и заливка пропускаются, иначе выделить chunk_id и
+//    зашифровать staging в tmp/. Снимок согласован: писатели держат полосу исключительно.
 // 2. Без блокировок: upload_started → Store::put_chunk (транзиентные ошибки — повтор
 //    бесконечно с задержкой, постоянные — чанк остаётся в overlay с ошибкой) →
 //    upload_finished.
@@ -15,6 +16,20 @@
 //    перенести dirty_attrs в inodes; затем одной транзакцией state.sqlite убрать строку
 //    (если version не изменилась), dirty_attrs и запись журнала. Иначе чанк не нужен:
 //    сообщение удаляется из канала, запись журнала убирается.
+//
+// Дедупликация (SPEC 8.1, шаг 2). Только на живые чанки (refcount > 0): мёртвый не оживляется,
+// потому что уборка могла уже удалить его сообщение, а строка с refcount = 0 осталась в индексе
+// канала (служебная запись без коммита, SPEC 6.6, 7.4). Поиск в фазе 1 — только подсказка
+// «шифровать не нужно»: он ничего не меняет, поэтому сбой или уход чанка не оставляет ни
+// лишнего refcount, ни записи в upload_journal. Привязка идёт в фазе 3 той же транзакцией, что
+// и экстент: под блокировкой записи MetaStore find_chunk_by_mac и put_extent (refcount++)
+// неделимы относительно уборки (commit.cpp, gc_chunks удаляет строку под той же блокировкой и
+// перепроверяет refcount = 0). Если между подсказкой и привязкой чанк умер или его убрали,
+// заливаемого файла нет: позиция ставится в очередь снова, и второй проход уже зальёт её
+// обычным путём. После сбоя между транзакциями index.sqlite и state.sqlite (строка
+// dirty_chunks пережила привязку) повторная привязка к тому же чанку не меняет refcount
+// (put_extent: тот же chunk_id).
+// Пакеты не дедуплицируются (SPEC 6.5).
 //
 // Порядок позиций инлайн-файла (SPEC 6.2: у инлайн-файла нет экстентов): запись дальше
 // позиции 0 переносит его данные в overlay позиции 0, и в индексе остаётся inline_data, пока
@@ -226,7 +241,9 @@ void Vfs::recover() {
                     meta::AttrUpdate u;
                     u.size = attrs->size;
                     u.mtime_ns = attrs->mtime_ns;
-                    u.ctime_ns = std::max(inode->ctime_ns, attrs->mtime_ns);
+                    // ctime = момент изменения индекса: recover --export-dirty по нему находит
+                    // данные, залитые после последнего коммита (SPEC 12.3).
+                    u.ctime_ns = std::max({inode->ctime_ns, attrs->mtime_ns, now_ns()});
                     meta::update_attrs(db, ino, u);
                 } else if (lower_index_size) {
                     meta::AttrUpdate u;
@@ -469,8 +486,9 @@ bool Vfs::try_seal_inline(int64_t ino, const Inode& inode, int64_t size) {
         u.size = size;
         if (attrs) {
             u.mtime_ns = attrs->mtime_ns;
-            u.ctime_ns = std::max(inode.ctime_ns, attrs->mtime_ns);
         }
+        // ctime — момент изменения индекса (запечатывание в инлайн): SPEC 12.3, recover.
+        u.ctime_ns = std::max({inode.ctime_ns, attrs ? attrs->mtime_ns : 0, now_ns()});
         meta::update_attrs(db, ino, u);
         return true;
     });
@@ -610,6 +628,7 @@ void Vfs::upload_chunk(const ChunkKey& key) {
     // Фаза 1: снимок и шифрование.
     bool blocked = false;
     bool empty_staging = false;
+    bool deduped = false;  // подходящий чанк уже есть: шифрования и заливки нет
     try {
         const std::shared_lock lock(stripe(key.ino));
         const auto view = overlay_->begin_upload(key);
@@ -651,12 +670,17 @@ void Vfs::upload_chunk(const ChunkKey& key) {
                 empty_staging = true;
             } else {
                 valid = std::min<int64_t>(valid, st.st_size);
-                chunk_id = meta_.write([](Db& db) { return meta::alloc_chunk_id(db); });
                 mac = crypto::content_mac(keys_.mac, fd.get(), static_cast<uint64_t>(valid));
-                tmp = paths_.tmp / (std::string(kTmpPrefix) + std::to_string(chunk_id));
-                crypto::encrypt_chunk_file(keys_.data, params_.fs_uuid,
-                                           static_cast<uint64_t>(chunk_id), fd.get(),
-                                           static_cast<uint64_t>(valid), tmp);
+                deduped =
+                    meta_.read([&](Db& db) { return meta::find_chunk_by_mac(db, mac, valid); })
+                        .has_value();
+                if (!deduped) {
+                    chunk_id = meta_.write([](Db& db) { return meta::alloc_chunk_id(db); });
+                    tmp = paths_.tmp / (std::string(kTmpPrefix) + std::to_string(chunk_id));
+                    crypto::encrypt_chunk_file(keys_.data, params_.fs_uuid,
+                                               static_cast<uint64_t>(chunk_id), fd.get(),
+                                               static_cast<uint64_t>(valid), tmp);
+                }
             }
         }
     } catch (const SysError& e) {
@@ -674,59 +698,67 @@ void Vfs::upload_chunk(const ChunkKey& key) {
         finish(std::nullopt);
         return;
     }
-    const auto enc_size =
-        static_cast<int64_t>(crypto::chunk_encrypted_size(static_cast<uint64_t>(valid)));
-    lease->shrink_to(static_cast<uint64_t>(enc_size));
-
-    // Фаза 2: заливка без блокировок.
-    auto remove_tmp = [&] {
-        std::error_code ec;
-        std::filesystem::remove(tmp, ec);
-    };
-    state_.upload_started(chunk_id, now_ns());
+    int64_t enc_size = 0;
     store::ChunkRef ref;
-    auto delay = opts_.retry_initial;
-    bool attempted = false;
-    for (;;) {
-        const auto view = overlay_->chunk(key);
-        if (!view || view->incarnation != inc) {
-            // Чанк больше не нужен (unlink, truncate, инлайн): не заливать.
-            remove_tmp();
-            if (!attempted) {
-                state_.remove_upload(chunk_id);
-            }
-            finish(std::nullopt);
-            return;
+    if (deduped) {
+        if (opts_.upload_probe) {
+            opts_.upload_probe("dedup_hinted");
         }
-        try {
-            ref = store_.put_chunk(tmp);
-            break;
-        } catch (const store::StoreError& e) {
-            if (e.kind() == store::StoreErrorKind::transient) {
-                attempted = true;  // таймаут мог и залить: журнал оставляем монтированию
-                note_error("upload of chunk " + std::to_string(chunk_id) +
-                           " failed, will retry: " + e.what());
-                if (!backoff(delay)) {
-                    remove_tmp();  // остановка: журнал без msg_id забудет монтирование
-                    finish(std::nullopt);
-                    return;
+        lease->release();  // шифрованной копии в tmp/ нет: место под неё не нужно (SPEC 8.3)
+    } else {
+        enc_size = static_cast<int64_t>(crypto::chunk_encrypted_size(static_cast<uint64_t>(valid)));
+        lease->shrink_to(static_cast<uint64_t>(enc_size));
+
+        // Фаза 2: заливка без блокировок.
+        auto remove_tmp = [&] {
+            std::error_code ec;
+            std::filesystem::remove(tmp, ec);
+        };
+        state_.upload_started(chunk_id, now_ns());
+        auto delay = opts_.retry_initial;
+        bool attempted = false;
+        for (;;) {
+            const auto view = overlay_->chunk(key);
+            if (!view || view->incarnation != inc) {
+                // Чанк больше не нужен (unlink, truncate, инлайн): не заливать.
+                remove_tmp();
+                if (!attempted) {
+                    state_.remove_upload(chunk_id);
                 }
-                continue;
+                finish(std::nullopt);
+                return;
             }
-            note_error("upload of chunk " + std::to_string(chunk_id) + " failed: " + e.what());
-            remove_tmp();
-            state_.remove_upload(chunk_id);
-            finish(ver);
-            return;
+            try {
+                ref = store_.put_chunk(tmp);
+                break;
+            } catch (const store::StoreError& e) {
+                if (e.kind() == store::StoreErrorKind::transient) {
+                    attempted = true;  // таймаут мог и залить: журнал оставляем монтированию
+                    note_error("upload of chunk " + std::to_string(chunk_id) +
+                               " failed, will retry: " + e.what());
+                    if (!backoff(delay)) {
+                        remove_tmp();  // остановка: журнал без msg_id забудет монтирование
+                        finish(std::nullopt);
+                        return;
+                    }
+                    continue;
+                }
+                note_error("upload of chunk " + std::to_string(chunk_id) + " failed: " + e.what());
+                remove_tmp();
+                state_.remove_upload(chunk_id);
+                finish(ver);
+                return;
+            }
         }
+        state_.upload_finished(chunk_id, ref.msg_id);
+        remove_tmp();
+        lease->release();
     }
-    state_.upload_finished(chunk_id, ref.msg_id);
-    remove_tmp();
-    lease->release();
 
     // Фаза 3: применить, если чанк ещё нужен.
     bool applied = false;
     bool inline_conflict = false;
+    bool dedup_lost = false;
     {
         const std::unique_lock lock(stripe(key.ino));
         const auto view = overlay_->chunk(key);
@@ -745,6 +777,18 @@ void Vfs::upload_chunk(const ChunkKey& key) {
                 if (len <= 0) {
                     return std::nullopt;
                 }
+                // Поиск и refcount++ (put_extent ниже) — одна транзакция под блокировкой записи
+                // MetaStore: уборка не удалит чанк, на который только что сослались. Искать
+                // нужно до любых изменений: nullopt транзакцию не откатывает.
+                int64_t target = chunk_id;
+                if (deduped) {
+                    const auto found = meta::find_chunk_by_mac(db, mac, valid);
+                    if (!found) {
+                        dedup_lost = true;  // умер или убран после подсказки: заливать нечего
+                        return std::nullopt;
+                    }
+                    target = found->chunk_id;
+                }
                 if (cur->inline_len) {
                     // Инлайн → позиционный. Позиция 0 заменяет инлайн-данные собой; пустой
                     // инлайн (после truncate) терять нечего. Непустой инлайн при экстенте
@@ -755,46 +799,61 @@ void Vfs::upload_chunk(const ChunkKey& key) {
                     }
                     meta::clear_inline(db, key.ino);
                 }
-                meta::NewChunk nc;
-                nc.chunk_id = chunk_id;
-                nc.kind = meta::ChunkKind::positional;
-                nc.msg_id = ref.msg_id;
-                if (!ref.remote_file_id.empty()) {
-                    nc.remote_file_id = ref.remote_file_id;
+                if (!deduped) {
+                    meta::NewChunk nc;
+                    nc.chunk_id = chunk_id;
+                    nc.kind = meta::ChunkKind::positional;
+                    nc.msg_id = ref.msg_id;
+                    if (!ref.remote_file_id.empty()) {
+                        nc.remote_file_id = ref.remote_file_id;
+                    }
+                    nc.plain_size = valid;
+                    nc.enc_size = enc_size;
+                    nc.content_mac.assign(mac.begin(), mac.end());
+                    meta::insert_chunk(db, nc, base_gen());
                 }
-                nc.plain_size = valid;
-                nc.enc_size = enc_size;
-                nc.content_mac.assign(mac.begin(), mac.end());
-                meta::insert_chunk(db, nc, base_gen());
-                meta::put_extent(db, meta::Extent{key.ino, key.idx, chunk_id, 0, len}, base_gen());
+                meta::put_extent(db, meta::Extent{key.ino, key.idx, target, 0, len}, base_gen());
                 meta::AttrUpdate u;
                 const bool clean_now = last_dirty && attrs.has_value();
                 if (clean_now) {
                     u.size = attrs->size;
                     u.mtime_ns = attrs->mtime_ns;
-                    u.ctime_ns = std::max(cur->ctime_ns, attrs->mtime_ns);
                 } else if (key.idx * s + len > cur->size) {
                     // Индекс сам по себе не должен держать экстент за inodes.size: иначе
                     // после обратного расширения без overlay ожил бы хвост (SPEC 6.2).
                     u.size = key.idx * s + len;
                 }
+                // ctime — момент привязки чанка в индексе (в том числе дедуплицированного): по нему
+                // recover --export-dirty находит залитое после коммита (SPEC 12.3).
+                u.ctime_ns = std::max({cur->ctime_ns, clean_now ? attrs->mtime_ns : 0, now_ns()});
                 meta::update_attrs(db, key.ino, u);
                 return clean_now;
             });
             if (clean) {
-                overlay_->finish_upload(key, inc, ver, *clean, chunk_id);
+                overlay_->finish_upload(key, inc, ver, *clean, deduped ? 0 : chunk_id);
                 applied = true;
             }
         }
     }
     if (!applied) {
-        discard_upload(chunk_id, ref.msg_id);
+        if (!deduped) {
+            discard_upload(chunk_id, ref.msg_id);
+        }
+        if (dedup_lost) {
+            // Подходящий чанк умер или убран: позиция заливается ещё раз (сейчас uploading).
+            overlay_->mark_queued(key, false);
+        }
         if (inline_conflict) {
             note_error("chunk " + std::to_string(key.ino) + ":" + std::to_string(key.idx) +
                        " cannot be applied: the inline data of position 0 is still in the index");
         }
         finish(inline_conflict ? std::optional<int64_t>(ver) : std::nullopt);
         return;
+    }
+    if (deduped) {
+        deduped_.fetch_add(1);
+        finish(std::nullopt);
+        return;  // залитых чанков не прибавилось: коммит по числу чанков не нужен
     }
     uploaded_.fetch_add(1);
     finish(std::nullopt);
@@ -844,7 +903,7 @@ void Vfs::resolve_empty_position(const ChunkKey& key, uint64_t incarnation) {
             meta::AttrUpdate u;
             u.size = attrs->size;
             u.mtime_ns = attrs->mtime_ns;
-            u.ctime_ns = std::max(cur->ctime_ns, attrs->mtime_ns);
+            u.ctime_ns = std::max({cur->ctime_ns, attrs->mtime_ns, now_ns()});
             meta::update_attrs(db, key.ino, u);
             return true;
         }

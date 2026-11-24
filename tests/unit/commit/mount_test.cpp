@@ -579,7 +579,8 @@ TEST_F(Mount, StaleHeadThatNeverClearsFailsAfterTheWindow) {
         mount_fs(stale, a_, o);
         FAIL() << "mount did not fail";
     } catch (const MountError& e) {
-        EXPECT_EQ(e.kind(), MountErrorKind::no_head);
+        // Локальный индекс есть: после окна это потеря головы (SPEC 7.2).
+        EXPECT_EQ(e.kind(), MountErrorKind::head_lost);
     }
     EXPECT_GT(stale.head_reads(), 2);
     EXPECT_LT(stale.head_reads(), 1000);
@@ -593,7 +594,7 @@ TEST_F(Mount, StaleHeadIsNotRetriedWithoutAWindowOrALocalHead) {
     }
     {  // окно 0 (по умолчанию, LocalDirStore): ответ принимается как есть
         StaleReadStore stale{*store_, 1'000'000, std::nullopt};
-        EXPECT_EQ(mount_error_with(stale, a_, mount_options()).kind(), MountErrorKind::no_head);
+        EXPECT_EQ(mount_error_with(stale, a_, mount_options()).kind(), MountErrorKind::head_lost);
         EXPECT_EQ(stale.head_reads(), 1);
     }
     {  // новая машина: локальной головы нет, ждать нечего
@@ -615,7 +616,8 @@ TEST_F(Mount, EmptyChannelHasNoHead) {
     const MountError e = mount_error(b_);
     EXPECT_EQ(e.kind(), MountErrorKind::no_head);
     EXPECT_NE(std::string(e.what()).find("init"), std::string::npos);
-    EXPECT_NE(std::string(e.what()).find("recover --scan"), std::string::npos);
+    // Поиска головы перебором истории в v1 нет (SPEC 7.2, issue #1): подсказки про него нет.
+    EXPECT_EQ(std::string(e.what()).find("recover --scan"), std::string::npos);
 }
 
 TEST_F(Mount, HeadThatIsNotAnIndexBlobIsRefused) {
@@ -624,7 +626,8 @@ TEST_F(Mount, HeadThatIsNotAnIndexBlobIsRefused) {
     write_file_atomic(file, Bytes(300, std::byte{0x42}));
     const auto ref = store_->put_chunk(file);
     set_pinned({ref.msg_id});
-    EXPECT_EQ(mount_error(a_).kind(), MountErrorKind::not_index_blob);
+    // С живым локальным индексом это потеря головы (SPEC 7.2), без него — подсказка про init.
+    EXPECT_EQ(mount_error(a_).kind(), MountErrorKind::head_lost);
     EXPECT_EQ(mount_error(b_).kind(), MountErrorKind::not_index_blob);
 }
 

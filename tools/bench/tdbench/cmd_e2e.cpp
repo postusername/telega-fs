@@ -7,6 +7,8 @@
 //   tgfs-bench e2e setup    --chat-file FILE   создать канал `tgfs-e2e-<дата>` и записать его id
 //   tgfs-bench e2e inspect  --chat-file FILE   что бот видит в канале: типы сообщений, имена
 //                                              документов (SPEC 4), подписи; без id и имён
+//   tgfs-bench e2e drop-head --chat-file FILE  БОТ снимает все закрепы и удаляет сообщение головы
+//                                              (SPEC 7.2, 16: сценарий M4 «потеря головы»)
 //   tgfs-bench e2e teardown --chat-file FILE   удалить канал и файл
 
 #include <sys/stat.h>
@@ -69,6 +71,35 @@ int64_t read_chat_file(const fs::path& path) {
         throw std::runtime_error("cannot read the chat id from the --chat-file");
     }
     return id;
+}
+
+// Голова канала с учётом кэша TDLib (SPEC 2): ChannelFull у бота обновляется раз в 60 с, и свежий
+// процесс может до минуты видеть старую голову (после unpin старой «закреплённого нет», 404).
+// Повторяем до `window`, раз в 10 с, с принудительным getSupergroupFullInfo. 0 — головы нет.
+int64_t find_head_id(td::TdClient& client, int64_t chat_id, seconds window, std::ostream& log) {
+    const auto deadline = std::chrono::steady_clock::now() + window;
+    for (;;) {
+        try {
+            const td::Json pinned =
+                client.call(td::Json{{"@type", "getChatPinnedMessage"}, {"chat_id", chat_id}});
+            return pinned.value("id", int64_t{0});
+        } catch (const td::TdException& e) {
+            if (e.error().code != 404 || std::chrono::steady_clock::now() >= deadline) {
+                log << "getChatPinnedMessage: " << e.error().to_string() << "\n";
+                return 0;
+            }
+        }
+        try {
+            const td::Json chat = client.call(td::Json{{"@type", "getChat"}, {"chat_id", chat_id}});
+            client.call(
+                td::Json{{"@type", "getSupergroupFullInfo"},
+                         {"supergroup_id", chat["type"].value("supergroup_id", int64_t{0})}});
+        } catch (const td::TdException& e) {
+            // Обновление кэша — только подсказка: следующая попытка getChatPinnedMessage всё решит.
+            log << "refresh before retry: " << e.error().to_string() << "\n";
+        }
+        std::this_thread::sleep_for(seconds{10});
+    }
 }
 
 void cmd_setup(BenchEnv& env, const BenchOptions& options, const E2eOptions& e2e) {
@@ -143,9 +174,11 @@ int cmd_inspect(BenchEnv& env, const E2eOptions& e2e) {
     if (!wait_chat_known(bot->client(), chat_id, seconds{90}, &error)) {
         throw std::runtime_error("the bot does not see the channel: " + error);
     }
-    const td::Json pinned =
-        bot->client().call(td::Json{{"@type", "getChatPinnedMessage"}, {"chat_id", chat_id}});
-    const int64_t last = (pinned.value("id", int64_t{0}) >> kServerIdShift) + 3;
+    const int64_t head_id = find_head_id(bot->client(), chat_id, seconds{150}, std::cerr);
+    if (head_id == 0) {
+        throw std::runtime_error("the channel has no pinned message (the head)");
+    }
+    const int64_t last = (head_id >> kServerIdShift) + 3;
     std::map<std::string, int> types;
     std::map<std::string, int> doc_kinds;
     int bad_names = 0;
@@ -184,6 +217,7 @@ int cmd_inspect(BenchEnv& env, const E2eOptions& e2e) {
             std::this_thread::sleep_for(seconds{10});
         }
     }
+    std::cout << "head server id: " << (last - 3) << "\n";
     for (const auto& [type, n] : types) {
         std::cout << "messages " << type << ": " << n << "\n";
     }
@@ -195,6 +229,65 @@ int cmd_inspect(BenchEnv& env, const E2eOptions& e2e) {
               << "documents with a caption: " << captions << "\n"
               << (bad_names == 0 && captions == 0 ? "INSPECT OK\n" : "INSPECT FAILED\n");
     return bad_names == 0 && captions == 0 ? 0 : 1;
+}
+
+// Потеря головы (SPEC 7.2, веха M4): бот снимает ВСЕ закрепы (в том числе старые, иначе вместо
+// «головы нет» получился бы откат) и удаляет сообщение головы. Аккаунт пользователя не участвует.
+// Печатает, что закреплено после (404 — головы нет); код 0, если головы нет и сообщения нет.
+int cmd_drop_head(BenchEnv& env, const BenchOptions& options, const E2eOptions& e2e) {
+    const int64_t chat_id = read_chat_file(e2e.chat_file);
+    FloodGuard guard(std::cerr, options.state_dir / "e2e-flood.csv", "e2e");
+    auto bot = env.open(Account::kBot, std::cerr);
+    std::string error;
+    if (!wait_chat_known(bot->client(), chat_id, seconds{90}, &error)) {
+        throw std::runtime_error("the bot does not see the channel: " + error);
+    }
+    const int64_t head = find_head_id(bot->client(), chat_id, seconds{150}, std::cout);
+    if (head == 0) {
+        std::cout << "there is no head to drop\n";
+        return 1;
+    }
+    std::cout << "head message server id " << (head >> kServerIdShift) << "\n";
+    guard.run("unpinAllChatMessages", [&] {
+        return bot->client().call(
+            td::Json{{"@type", "unpinAllChatMessages"}, {"chat_id", chat_id}});
+    });
+    bump_counter(options, "e2e.bot_actions", 1);
+    guard.run("deleteMessages", [&] {
+        return bot->client().call(td::Json{{"@type", "deleteMessages"},
+                                           {"chat_id", chat_id},
+                                           {"message_ids", td::Json::array({head})},
+                                           {"revoke", true}});
+    });
+    bump_counter(options, "e2e.bot_actions", 1);
+    // Кэш TDLib может ещё минуту показывать старую голову (SPEC 2): ждём, пока бот увидит
+    // «закрепа нет» и «сообщения нет», но не дольше 90 с.
+    bool no_pin = false;
+    bool no_msg = false;
+    for (int i = 0; i < 18 && !(no_pin && no_msg); ++i) {
+        try {
+            const td::Json pinned = bot->client().call(
+                td::Json{{"@type", "getChatPinnedMessage"}, {"chat_id", chat_id}});
+            no_pin = pinned.value("id", int64_t{0}) == 0;
+        } catch (const td::TdException& e) {
+            no_pin = e.error().code == 404;
+        }
+        try {
+            const td::Json msgs =
+                bot->client().call(td::Json{{"@type", "getMessages"},
+                                            {"chat_id", chat_id},
+                                            {"message_ids", td::Json::array({head})}});
+            no_msg = msgs["messages"][0].is_null();
+        } catch (const td::TdException&) {
+            no_msg = true;
+        }
+        if (!(no_pin && no_msg)) {
+            std::this_thread::sleep_for(seconds{5});
+        }
+    }
+    std::cout << "after: pinned message " << (no_pin ? "none" : "STILL PRESENT")
+              << ", head message " << (no_msg ? "deleted" : "STILL PRESENT") << "\n";
+    return no_pin && no_msg ? 0 : 1;
 }
 
 }  // namespace
@@ -228,6 +321,18 @@ void add_e2e_command(CLI::App& app, const BenchOptions& options, int* exit_code)
         ->callback([&options, exit_code, e2e] {
             BenchEnv env(options);
             *exit_code = cmd_inspect(env, *e2e);
+        });
+
+    cmd->add_subcommand("drop-head",
+                        "Bot only: unpin everything and delete the head message (SPEC 7.2, M4)")
+        ->callback([&options, exit_code, e2e] {
+            BenchEnv env(options);
+            try {
+                *exit_code = cmd_drop_head(env, options, *e2e);
+            } catch (const StopExperiment& ex) {
+                std::cerr << "STOPPED: " << ex.what() << "\n";
+                *exit_code = 2;
+            }
         });
 
     cmd->add_subcommand("teardown", "Delete the channel and the --chat-file")

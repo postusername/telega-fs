@@ -104,6 +104,12 @@ void write_chain_state(StateStore& state, const std::vector<ChainBlob>& chain,
     state.set_int(state_key::head_msg_id, head.msg_id);
     state.set_blob(state_key::head_hash, head.hash);
     state.set_int(state_key::index_dirty, 0);
+    // Локальный индекс только что равен цепочке головы: всё изменённое позже ещё не в канале
+    // (SPEC 6.4, committed_take_ns).
+    state.set_int(state_key::committed_take_ns,
+                  std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      std::chrono::system_clock::now().time_since_epoch())
+                      .count());
     state.clear_pending();
     state.reset_chain_to_snapshot(chain.front().msg_id, chain.front().blob_size);
     for (size_t i = 1; i < chain.size(); ++i) {
@@ -225,11 +231,10 @@ bool catch_up(const FsPaths& paths, const std::vector<ChainBlob>& chain, uint64_
 bool is_interrupted_commit(StateStore& state, const FsPaths& paths, const ChainBlob& head,
                            int64_t h_l, ByteSpan hash_l) {
     const auto& h = head.header;
-    if (h.prev_msg_id != h_l) {
-        return false;
-    }
+    // prev_msg_id проверяется только у дельты: у снимка при mount --force-local это реальная
+    // (откатанная) голова или 0 при потере головы (SPEC 7.2), а не h_l. Снимок узнаётся по телу.
     if (h.kind == crypto::BlobKind::delta) {
-        if (!same_bytes(h.prev_hash, hash_l)) {
+        if (h.prev_msg_id != h_l || !same_bytes(h.prev_hash, hash_l)) {
             return false;
         }
         std::vector<int64_t> local_chain;
@@ -378,6 +383,24 @@ void cleanup_tmp(const FsPaths& paths) {
     }
 }
 
+// Keyring профиля, если он читается и в нём есть ФС (SPEC 11): без него ключей локального индекса
+// нет, и потерянную голову не восстановить. Порча keyring здесь не ошибка (ниже её разберёт
+// основной путь), а «локального состояния нет».
+std::optional<crypto::KeyringFile> local_keyring_with_fs(const FsPaths& paths) {
+    if (!std::filesystem::exists(paths.keyring())) {
+        return std::nullopt;
+    }
+    try {
+        crypto::KeyringFile loaded = crypto::load_keyring(paths.keyring());
+        if (crypto::keyring_has_fs(loaded)) {
+            return loaded;
+        }
+    } catch (const crypto::CorruptError&) {
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 void ensure_fs_dirs(const FsPaths& paths) {
@@ -473,7 +496,22 @@ std::optional<store::HeadInfo> read_head_for_mount(store::Store& store, const Fs
     } catch (const std::exception&) {
         return head;  // состояние повреждено: разберёт основной путь монтирования
     }
-    const auto behind = [&] { return !head || head->msg_id < local_head; };
+    const auto behind = [&] {
+        if (!head) {
+            return true;
+        }
+        if (head->msg_id >= local_head) {
+            return false;
+        }
+        // Старое сообщение, не блоб индекса, — не кэш нашей головы, а чужой закреп (SPEC 7.2,
+        // потеря головы): ждать нечего.
+        try {
+            (void)crypto::parse_index_header(head->header);
+            return true;
+        } catch (const crypto::CorruptError&) {
+            return false;
+        }
+    };
     if (local_head == 0 || !behind()) {
         return head;
     }
@@ -499,17 +537,33 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
 
     // Шаг 4, заголовок головы (без аутентификации: нужен для KDF на новой машине).
     const auto head_info = read_head_for_mount(store, paths, options);
-    if (!head_info) {
-        throw MountError(MountErrorKind::no_head,
-                         "the channel has no head (no pinned message): run 'telega-fs init', "
-                         "or 'telega-fs recover --scan' if the head was lost");
-    }
     crypto::IndexHeader claimed;
-    try {
-        claimed = crypto::parse_index_header(head_info->header);
-    } catch (const crypto::CorruptError&) {
-        throw MountError(MountErrorKind::not_index_blob,
-                         "the pinned message is not an index blob: run 'telega-fs recover --scan'");
+    bool head_is_index = false;
+    if (head_info) {
+        try {
+            claimed = crypto::parse_index_header(head_info->header);
+            head_is_index = true;
+        } catch (const crypto::CorruptError&) {
+            head_is_index = false;
+        }
+    }
+    // Потеря головы (SPEC 7.2): закреплённого нет или закреплено не блоб индекса. С живым
+    // локальным индексом это отдельная строка таблицы: отказ с вариантами --ro и --force-local.
+    // Без локального индекса монтировать нечего: подсказка про init (поиска головы перебором
+    // истории в v1 нет, issue #1).
+    const bool head_lost = !head_is_index;
+    if (head_lost) {
+        const std::string why =
+            head_info ? "the pinned message is not an index blob" : "the channel has no head";
+        const auto local = local_keyring_with_fs(paths);
+        if (!local || !std::filesystem::exists(paths.index_db()) ||
+            !std::filesystem::exists(paths.state_db())) {
+            throw MountError(head_info ? MountErrorKind::not_index_blob : MountErrorKind::no_head,
+                             why +
+                                 ", and there is no local index to mount instead: run "
+                                 "'telega-fs init' for a new file system");
+        }
+        claimed.fs_uuid = local->fs_uuid;
     }
     const FsUuid fs_uuid = claimed.fs_uuid;
 
@@ -593,13 +647,17 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     }
     const crypto::SubKeys sub = crypto::derive_subkeys(*master);
 
-    // Шаг 4, тело головы: аутентичность, fs_uuid.
-    const Bytes head_blob = store.read_index(head_info->msg_id);
-    if (head_blob.size() < crypto::kIndexHeaderSize ||
-        !same_bytes(ByteSpan{head_blob}.first(crypto::kIndexHeaderSize), head_info->header)) {
-        corrupt("the head header does not match the head blob");
+    // Шаг 4, тело головы: аутентичность, fs_uuid. При потере головы тела нет.
+    Bytes head_blob;
+    ChainBlob head;
+    if (!head_lost) {
+        head_blob = store.read_index(head_info->msg_id);
+        if (head_blob.size() < crypto::kIndexHeaderSize ||
+            !same_bytes(ByteSpan{head_blob}.first(crypto::kIndexHeaderSize), head_info->header)) {
+            corrupt("the head header does not match the head blob");
+        }
+        head = open_head(sub.index, fs_uuid, head_info->msg_id, head_blob);
     }
-    const ChainBlob head = open_head(sub.index, fs_uuid, head_info->msg_id, head_blob);
     const uint64_t g_r = head.header.generation;
     // Голова подлинная. keyring с ФС сохраняется позже, после проверки локального состояния
     // (SPEC 11): иначе он привязался бы к ФС, с которой профиль всё равно не смонтируется. В
@@ -659,7 +717,8 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     Bytes hash_l = state->get_blob(state_key::head_hash).value_or(Bytes{});
     rep.local_generation = g_l;
 
-    if (have_index && g_r == g_l + 1 && is_interrupted_commit(*state, paths, head, h_l, hash_l)) {
+    if (!head_lost && have_index && g_r == g_l + 1 &&
+        is_interrupted_commit(*state, paths, head, h_l, hash_l)) {
         spdlog::warn(
             "mount: the last commit (generation {}) was interrupted after pin, finishing it", g_r);
         replay_commit_state(*state, head);
@@ -670,7 +729,45 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     }
 
     bool forced_local = false;
-    if (!have_index) {
+    std::optional<int64_t> lost_head_foreign;  // закреплённое чужое сообщение при потере головы
+    if (head_lost) {
+        // Индекс другой ФС под своим keyring: отказ без вариантов, до любых изменений.
+        {
+            OpenOptions open_ro;
+            open_ro.read_only = true;
+            Db db = Db::open(paths.index_db(), open_ro);
+            if (read_params(db).fs_uuid != fs_uuid) {
+                throw MountError(MountErrorKind::foreign_fs,
+                                 "local index belongs to a different file system than the keyring");
+            }
+        }
+        if (ro) {
+            // Монтируется локальный индекс как есть, ничего не меняется (SPEC 7.2, --ro).
+            rep.situation = MountSituation::local_read_only;
+        } else if (options.force_local) {
+            // Следующий коммит — снимок локального индекса с generation G_l + 1; CAS ждёт «головы
+            // нет» либо именно закреплённое чужое сообщение, prev_msg_id = 0, шаг 7 коммита
+            // чужое сообщение не открепляет (CommitManager::set_cas_override_lost_head).
+            forced_local = true;
+            if (head_info) {
+                lost_head_foreign = head_info->msg_id;
+            }
+            state->transaction([&] {
+                state->set_int(state_key::force_snapshot, 1);
+                state->set_int(state_key::index_dirty, 1);
+            });
+            rep.situation = MountSituation::forced_local;
+        } else {
+            throw MountError(
+                MountErrorKind::head_lost,
+                std::string(head_info ? "the channel pins a message that is not an index blob"
+                                      : "the channel has no pinned message") +
+                    " (the head of the file system was lost), but the local index of generation " +
+                    std::to_string(g_l) +
+                    " exists. Mount with --ro to use the local index read-only, or with "
+                    "--force-local to commit it as the new head");
+        }
+    } else if (!have_index) {
         const auto chain = fetch_or_corrupt(store, sub.index, fs_uuid, head.msg_id, head_blob);
         if (discard_orphaned) {
             spdlog::warn(
@@ -764,21 +861,28 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
 
     if (!ro) {
         reconcile_history(*fs->meta_, *fs->state_);
-        cleanup_orphans(store, *fs->meta_, *fs->state_, rep);
-        delete_detached(*fs->meta_, *fs->state_, paths, rep);
-        cleanup_tmp(paths);
-        fs->state_->set_int(state_key::clean_shutdown, 0);  // шаг 9
+        if (!options.maintenance) {
+            cleanup_orphans(store, *fs->meta_, *fs->state_, rep);
+            delete_detached(*fs->meta_, *fs->state_, paths, rep);
+            cleanup_tmp(paths);
+            fs->state_->set_int(state_key::clean_shutdown, 0);  // шаг 9
+        }
     }
 
     CommitConfig config = options.commit;
     config.tmp_dir = paths.tmp();
     config.read_only = ro;
+    config.skip_gc = config.skip_gc || options.maintenance;
     fs->committer_ = std::make_unique<CommitManager>(
         *fs->meta_, *fs->state_, store,
         BlobKeys{.k_index = sub.index, .fs_uuid = fs_uuid, .kdf = kdf, .wrapped_master = wrapped},
         std::move(config));
     if (forced_local) {
-        fs->committer_->set_cas_override(head.msg_id, g_r);
+        if (head_lost) {
+            fs->committer_->set_cas_override_lost_head(lost_head_foreign);
+        } else {
+            fs->committer_->set_cas_override(head.msg_id, g_r);
+        }
     }
     if (!ro && options.start_background) {
         fs->committer_->start();

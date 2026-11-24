@@ -1391,9 +1391,17 @@ struct TelegramStore::Impl {
             throw store_error(e, "getChatPinnedMessage");
         }
         const int64_t id = get_int(message, "id");
+        if (id == 0) {
+            throw_store(StoreErrorKind::permanent, "the pinned message has no id");
+        }
         const auto file = document_file(message);
-        if (id == 0 || !file) {
-            throw_store(StoreErrorKind::permanent, "the pinned message is not a document");
+        if (!file) {
+            // Закреплено чужое сообщение, не документ (SPEC 7.2: потеря головы). Заголовка нет:
+            // вызывающий разберёт пустой заголовок как «не блоб индекса».
+            note_known(id);
+            HeadInfo foreign;
+            foreign.msg_id = id;
+            return foreign;
         }
         note_known(id);
         cache_put(id, file->id, file->size);
@@ -1568,6 +1576,36 @@ void TelegramStore::delete_messages(std::span<const int64_t> msg_ids) {
         }
         s.forget_known(batch);
     }
+}
+
+std::vector<bool> TelegramStore::messages_exist(std::span<const int64_t> msg_ids) {
+    Impl& s = *impl_;
+    std::vector<bool> out;
+    out.reserve(msg_ids.size());
+    for (size_t at = 0; at < msg_ids.size(); at += kMessagesBatch) {
+        const size_t end = std::min(msg_ids.size(), at + kMessagesBatch);
+        const std::vector<int64_t> batch(msg_ids.begin() + static_cast<std::ptrdiff_t>(at),
+                                         msg_ids.begin() + static_cast<std::ptrdiff_t>(end));
+        const auto deadline = Impl::deadline_in(s.options.read_timeout);
+        s.ensure_chat(deadline);
+        // read_call выжидает FLOOD_WAIT общей паузой лимитера (SPEC 10.2).
+        const Json reply = s.read_call(
+            Json{{"@type", "getMessages"}, {"chat_id", s.options.chat_id}, {"message_ids", batch}},
+            deadline, "getMessages");
+        const Json& messages = get_obj(reply, "messages");
+        if (!messages.is_array() || messages.size() != batch.size()) {
+            throw_store(StoreErrorKind::permanent,
+                        "getMessages returned a wrong number of results");
+        }
+        for (size_t i = 0; i < batch.size(); ++i) {
+            const bool exists = !messages[i].is_null();
+            if (exists) {
+                s.note_known(batch[i]);
+            }
+            out.push_back(exists);
+        }
+    }
+    return out;
 }
 
 std::optional<HeadInfo> TelegramStore::read_head() { return impl_->read_head(); }

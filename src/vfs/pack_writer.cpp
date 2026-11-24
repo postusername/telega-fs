@@ -442,10 +442,12 @@ void PackWriter::apply(int64_t chunk_id, const store::ChunkRef& ref, int64_t pla
             if (o.attrs) {
                 u.size = o.attrs->size;
                 u.mtime_ns = o.attrs->mtime_ns;
-                u.ctime_ns = std::max(o.cur.ctime_ns, o.attrs->mtime_ns);
             } else if (o.len > o.cur.size) {
                 u.size = o.len;
             }
+            // ctime — момент привязки пакета в индексе: по нему recover --export-dirty находит
+            // залитое после последнего коммита (SPEC 12.3).
+            u.ctime_ns = std::max({o.cur.ctime_ns, o.attrs ? o.attrs->mtime_ns : 0, now_ns()});
             meta::update_attrs(db, o.p->ino, u);
             applied.push_back({o.p, PackedObject{{o.p->ino, 0}, o.p->incarnation, o.p->version}});
         }

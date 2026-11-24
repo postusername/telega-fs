@@ -24,3 +24,13 @@ set_tests_properties(telega_fs.e2e_m3 PROPERTIES
     TIMEOUT 14400
     SKIP_RETURN_CODE 77
     ENVIRONMENT "E2E_CTEST=1;TGFS_BIN=$<TARGET_FILE:telega-fs>;BENCH_BIN=$<TARGET_FILE:tgfs-bench>")
+
+# Сценарий M4 (status/sync на смонтированной ФС, дедупликация, потеря головы и --force-local,
+# fsck, gc, gc --compact): около часа, возобновляемый, тоже лучше напрямую (tests/e2e/e2e_m4.sh).
+add_test(NAME telega_fs.e2e_m4
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/e2e_m4.sh")
+set_tests_properties(telega_fs.e2e_m4 PROPERTIES
+    LABELS "e2e;long"
+    TIMEOUT 10800
+    SKIP_RETURN_CODE 77
+    ENVIRONMENT "E2E_CTEST=1;TGFS_BIN=$<TARGET_FILE:telega-fs>;BENCH_BIN=$<TARGET_FILE:tgfs-bench>")

@@ -119,6 +119,7 @@ class LocalDirStore final : public Store {
     // Ничего не скачивает: только считает вызов и байты (SPEC 8.2, 14).
     void prefetch(const ChunkRef& ref, uint64_t offset, uint64_t len, uint32_t distance) override;
     void delete_messages(std::span<const int64_t> msg_ids) override;
+    std::vector<bool> messages_exist(std::span<const int64_t> msg_ids) override;
     std::optional<HeadInfo> read_head() override;
     Bytes read_index(int64_t msg_id) override;
     int64_t put_index(const std::filesystem::path& blob) override;

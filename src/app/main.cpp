@@ -10,7 +10,9 @@
 #include <stdexcept>
 #include <string>
 
+#include "app/cmd_maint.h"
 #include "app/commands.h"
+#include "app/maint_cmds.h"
 #include "app/tg_session.h"
 #include "app/version.h"
 #include "td/tdjson_transport.h"
@@ -117,12 +119,61 @@ int run(int argc, char** argv) {
     mount->add_flag("--discard-local", mount_args.discard_local,
                     "Drop local changes if the channel is newer");
     mount->add_flag("--force-local", mount_args.force_local,
-                    "Accept the local state if the channel head was rolled back");
+                    "Commit the local state over a rolled back or lost channel head");
     mount->add_option("-o", mount_args.options, "Extra FUSE mount options (comma separated)")
         ->type_name("OPTS");
     mount->callback([&] {
         mount_args.global = global;
         exit_code = telega::app::run_mount(mount_args);
+    });
+
+    telega::app::FsckArgs fsck_args;
+    auto* fsck = app.add_subcommand(
+        "fsck", "Check the index and the channel messages; with --repair fix the index");
+    fsck->add_flag("--repair", fsck_args.repair,
+                   "Fix the index only (nothing is deleted in the channel) and commit it");
+    fsck->add_flag("--verify-data", fsck_args.verify_data,
+                   "Download every chunk and verify its authentication tags");
+    fsck->callback([&] {
+        fsck_args.global = global;
+        exit_code = telega::app::run_fsck(fsck_args);
+    });
+
+    telega::app::RecoverArgs recover_args;
+    auto* recover = app.add_subcommand(
+        "recover", "Save uncommitted local data when the channel is newer than the local state");
+    recover
+        ->add_option("--export-dirty", recover_args.export_dir,
+                     "Write the uncommitted files of the local overlay into DIR")
+        ->type_name("DIR")
+        ->required();
+    recover->callback([&] {
+        recover_args.global = global;
+        exit_code = telega::app::run_recover(recover_args);
+    });
+
+    telega::app::StatusArgs status_args;
+    auto* status = app.add_subcommand("status", "Show generation, dirty data and upload queue");
+    status->add_flag("--json", status_args.json, "Print the status as JSON");
+    status->callback([&] {
+        status_args.global = global;
+        exit_code = telega::app::run_status(status_args);
+    });
+
+    telega::app::SyncArgs sync_args;
+    auto* sync =
+        app.add_subcommand("sync", "Upload all dirty data and commit (mounted file system)");
+    sync->callback([&] {
+        sync_args.global = global;
+        exit_code = telega::app::run_sync(sync_args);
+    });
+
+    telega::app::GcArgs gc_args;
+    auto* gc = app.add_subcommand("gc", "Delete expired chunks and index blobs (not mounted)");
+    gc->add_flag("--compact", gc_args.compact, "Also compact mostly dead packs");
+    gc->callback([&] {
+        gc_args.global = global;
+        exit_code = telega::app::run_gc(gc_args);
     });
 
     CLI11_PARSE(app, argc, argv);

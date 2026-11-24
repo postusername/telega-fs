@@ -56,7 +56,9 @@ struct KeySource {
 enum class MountErrorKind : uint8_t {
     wrong_password,  // неверный пароль или keyfile
     bad_key_source,  // ФС создана с keyfile, а дан пароль (или наоборот), или ничего не дано
-    no_head,  // в канале нет закреплённого: init или recover --scan
+    no_head,  // в канале нет закреплённого, локального индекса тоже нет: подсказка про init
+    head_lost,  // головы нет или она не блоб индекса, а локальный индекс есть: --ro или
+                // --force-local
     not_index_blob,  // голова — не блоб индекса
     corrupt,  // порча, подмена, перестановка или пропуск элемента цепочки
     foreign_fs,      // канал или локальные файлы от другой ФС
@@ -83,7 +85,11 @@ struct MountOptions {
     KeySource key;
     bool read_only = false;  // --ro
     bool discard_local = false;  // --discard-local: G_r > G_l с локальными изменениями
-    bool force_local = false;  // --force-local: G_r < G_l, следующий коммит — снимок
+    bool force_local = false;  // --force-local: G_r < G_l или потеря головы, коммит — снимок
+    // Служебная команда без FUSE (fsck --repair): после выбора индекса не делаются сироты
+    // upload_journal, удаление висячих inode, чистка tmp/ и clean_shutdown = 0 (SPEC 7.2,
+    // шаги 7–9): fsck ничего не удаляет в канале (SPEC 12.3).
+    bool maintenance = false;
     // Кэш TDLib (SPEC 2): сразу после init или размонтирования голова канала может до минуты
     // читаться старой или пустой. Если у профиля есть локальный индекс с головой H, а канал
     // отдал «нет головы» или голову старше H, чтение повторяется раз в `stale_head_period`, но
@@ -101,8 +107,8 @@ enum class MountSituation : uint8_t {
     caught_up,        // G_r > G_l: применены недостающие дельты
     rebuilt,          // G_r > G_l: индекс собран из цепочки заново
     discarded_local,  // G_r > G_l с изменениями, --discard-local
-    forced_local,     // G_r < G_l, --force-local
-    local_read_only,  // --ro при конфликте или откате: отдан локальный индекс как есть
+    forced_local,     // G_r < G_l или потеря головы, --force-local
+    local_read_only,  // --ro при конфликте, откате или потере головы: локальный индекс как есть
 };
 
 struct MountReport {

@@ -567,10 +567,16 @@ std::optional<Chunk> get_chunk(Db& db, int64_t chunk_id) {
 }
 
 std::optional<Chunk> find_chunk_by_mac(Db& db, ByteSpan mac, int64_t plain_size) {
+    // Нулевой MAC fsck --repair ставит битым чанкам (SPEC 12.3): такие чанки не находятся.
+    // Настоящий MAC нулевым не бывает, но проверка дешевле, чем довериться этому.
+    if (mac.size() != 32 ||
+        std::all_of(mac.begin(), mac.end(), [](std::byte b) { return b == std::byte{0}; })) {
+        return std::nullopt;
+    }
     static const std::string kSql =
         sql("SELECT ", kChunkColumns,
             " FROM chunks WHERE content_mac = ? AND plain_size = ? AND kind = 1 "
-            "ORDER BY chunk_id LIMIT 1");
+            "AND refcount > 0 ORDER BY chunk_id LIMIT 1");
     Stmt st = db.cached(kSql);
     st.bind(1, mac).bind(2, plain_size);
     if (!st.step()) {

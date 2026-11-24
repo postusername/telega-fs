@@ -100,6 +100,9 @@ struct VfsOptions {
     std::chrono::milliseconds pack_max_age{30'000};
     // Только для тестов: сбой на шаге заливки пакета (см. PackHooks::probe).
     std::function<void(std::string_view)> pack_probe;
+    // Только для тестов: вызывается в upload_chunk, когда подсказка дедупликации найдена, а
+    // привязка ещё не сделана («dedup_hinted», SPEC 8.1, шаг 2). Тест убирает чанк, как уборка.
+    std::function<void(std::string_view)> upload_probe;
     // Учёт staging и обратное давление (SPEC 8.3, 12.2). Предел staging/ + tmp/; порог, выше
     // которого запечатывание идёт без seal_delay (0 — 75 % от staging_limit); сколько write
     // ждёт места до ENOSPC.
@@ -193,6 +196,7 @@ struct VfsStatus {
     uint64_t staging_used = 0;  // занято в staging/ + tmp/ (SPEC 8.3)
     uint64_t staging_limit = 0;
     uint64_t uploaded_chunks = 0;
+    uint64_t deduped_chunks = 0;  // позиции, привязанные к готовому чанку без заливки (SPEC 8.1)
     bool fatal = false;
     std::string last_error;
 };
@@ -441,6 +445,7 @@ class Vfs {
 
     std::atomic<bool> fatal_{false};
     std::atomic<uint64_t> uploaded_{0};
+    std::atomic<uint64_t> deduped_{0};
     std::atomic<uint64_t> rmw_peak_{0};
     std::mutex relieve_mu_;  // лист: один обходчик давления за раз
 

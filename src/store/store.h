@@ -29,6 +29,8 @@ struct ChunkRef {
 };
 
 inline constexpr size_t kHeadHeaderSize = 256;
+// Размер пачки getMessages и deleteMessages (SPEC 4, 7.4).
+inline constexpr size_t kMessagesBatch = 100;
 
 struct HeadInfo {
     int64_t msg_id = 0;
@@ -96,6 +98,15 @@ class Store {
 
     // Удалить сообщения. Отсутствующие id не ошибка.
     virtual void delete_messages(std::span<const int64_t> msg_ids) = 0;
+
+    // Какие из сообщений существуют (fsck, SPEC 12.3): ответ по одному bool на каждый id, в том
+    // же порядке. TelegramStore делает один getMessages на вызов (до 100 id, SPEC 10.2, 4), поэтому
+    // вызывающий режет список пачками по kMessagesBatch. Реализация по умолчанию не умеет:
+    // permanent-ошибка.
+    virtual std::vector<bool> messages_exist(std::span<const int64_t> msg_ids) {
+        (void)msg_ids;
+        throw StoreError(StoreErrorKind::permanent, "messages_exist is not supported");
+    }
 
     // Голова ФС: самое новое закреплённое сообщение. nullopt — закреплённых нет.
     virtual std::optional<HeadInfo> read_head() = 0;

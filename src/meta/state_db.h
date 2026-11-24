@@ -36,6 +36,9 @@ inline constexpr std::string_view head_hash = "head_hash";              // BLOB 
 inline constexpr std::string_view clean_shutdown = "clean_shutdown";    // INTEGER 0/1
 inline constexpr std::string_view force_snapshot = "force_snapshot";    // INTEGER 0/1
 inline constexpr std::string_view index_dirty = "index_dirty";          // INTEGER 0/1
+// INTEGER, наносекунды CLOCK_REALTIME: забор патча или фиксация среза последнего успешного
+// коммита (SPEC 6.4); изменённое позже могло не попасть в канал (recover --export-dirty).
+inline constexpr std::string_view committed_take_ns = "committed_take_ns";
 }  // namespace state_key
 
 struct PendingPatchset {

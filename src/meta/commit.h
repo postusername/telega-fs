@@ -143,6 +143,9 @@ struct CommitConfig {
     uint64_t patch_take_rows = 2000;
 
     bool read_only = false;  // монтирование с --ro
+    // Коммит без шага 9 (отложенной уборки): обслуживающие команды вроде fsck --repair ничего
+    // не удаляют в канале (SPEC 12.3).
+    bool skip_gc = false;
 
     // Тестовый хук: вызывается после отпускания блокировки MetaStore, перед записью забранного
     // патча в pending_patchsets (под patch_queue_mu_). Исключение считается сбоем записи.
@@ -227,6 +230,10 @@ class CommitManager final : public Committer {
     // mount --force-local (SPEC 7.2, G_r < G_l): CAS следующего коммита идёт против реальной
     // головы канала (msg_id, generation), а не против (H, G) из state.sqlite.
     void set_cas_override(int64_t head_msg_id, uint64_t head_generation);
+    // mount --force-local при потере головы (SPEC 7.2): CAS ждёт «головы нет» (foreign_msg_id пуст,
+    // prev_msg_id = 0) либо именно закреплённое чужое сообщение (не блоб индекса): шаг 7 его не
+    // открепляет, prev_msg_id = 0.
+    void set_cas_override_lost_head(std::optional<int64_t> foreign_msg_id);
 
     // Промежуточный забор: забрать патч в pending_patchsets, не делая коммит (SPEC 6.6). Не
     // делается (nullopt), если есть неподтверждённый pin, следующий блоб обязан быть снимком,
@@ -247,6 +254,18 @@ class CommitManager final : public Committer {
 
     [[nodiscard]] CommitStats stats() const;
 
+    // Отложенная уборка (SPEC 7.4) для текущего base_generation без коммита: команда `gc`
+    // (SPEC 12.3). Та же уборка, что идёт шагом 9 каждого коммита, но с сегодняшним
+    // retain_generations: после его уменьшения созревают чанки и цепочки, которые прошлые
+    // коммиты оставили. Под commit_mu_, поэтому не пересекается с коммитом. Ошибка Store при
+    // удалении сообщений не бросается (остаток уйдёт со следующей уборкой), ошибка индекса —
+    // CommitError.
+    struct GcResult {
+        size_t chunks_deleted = 0;
+        size_t blobs_deleted = 0;
+    };
+    GcResult collect_garbage();
+
   private:
     // Сведения о залитом блобе для шага 8.
     struct Uploaded {
@@ -258,6 +277,9 @@ class CommitManager final : public Committer {
         // Наибольший seq из pending_patchsets, вошедший в блоб (дельта: склеен; снимок: уже в
         // теле). Патчи с большим seq дописал промежуточный забор, шаг 8 их не трогает.
         int64_t max_pending_seq = 0;
+        // CLOCK_REALTIME забора патча (дельта) или фиксации среза (снимок), взятый под блокировкой
+        // MetaStore; пишется в state.sqlite шагом 8 как committed_take_ns (SPEC 6.4).
+        int64_t take_ns = 0;
         // false: pin точно не прошёл (set_head вернул permanent). Тогда кэш TDLib ничего не
         // скрывает, и неподтверждённая попытка разбирается одним чтением головы (SPEC 7.1).
         bool pin_may_have_passed = true;
@@ -269,6 +291,9 @@ class CommitManager final : public Committer {
     struct CasExpect {
         std::optional<int64_t> msg_id;  // nullopt — канал пуст (первый коммит после init)
         uint64_t generation = 0;
+        // msg_id — чужое сообщение, не блоб нашей ФС (потеря головы, SPEC 7.2): голова
+        // сверяется по одному msg_id, prev_msg_id = 0, шаг 7 коммита сообщение не открепляет.
+        bool foreign = false;
     };
     // Чанк, строка которого уже удалена уборкой, а сообщение — ещё нет.
     struct GcVictim {
@@ -296,6 +321,8 @@ class CommitManager final : public Committer {
     std::optional<store::HeadInfo> read_head_for_unconfirmed(const Uploaded& up);
     // CAS шага 4 с повтором после своего pin (SPEC 7.1). true — голова совпала.
     bool cas_with_retry(const std::optional<store::HeadInfo>& first, const CasExpect& expect);
+    [[nodiscard]] static bool matches(const std::optional<store::HeadInfo>& head,
+                                      const CasExpect& expect);
     [[nodiscard]] bool is_stale_own_head(const std::optional<store::HeadInfo>& head,
                                          const CasExpect& expect) const;
     // Ждать d по часам CommitManager; false — идёт остановка.

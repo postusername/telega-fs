@@ -44,7 +44,8 @@ add_library(telega_commit STATIC
     meta/commit.cpp
     meta/chain.cpp
     meta/mount.cpp
-    meta/init.cpp)
+    meta/init.cpp
+    meta/fsck.cpp)
 target_link_libraries(telega_commit PUBLIC telega_meta telega_crypto telega_store)
 
 # vfs: Overlay, пути данных, операции ФС по inode (SPEC 8, 9). Блок ведёт исполнитель vfs.
@@ -56,7 +57,8 @@ add_library(telega_vfs STATIC
     vfs/staging_budget.cpp
     vfs/pack_writer.cpp
     vfs/pack_compact.cpp
-    vfs/chunk_reader.cpp)
+    vfs/chunk_reader.cpp
+    vfs/export_dirty.cpp)
 target_link_libraries(telega_vfs PUBLIC telega_meta telega_crypto telega_store)
 
 # fuse: libfuse3 low-level поверх Vfs (SPEC 9)
@@ -91,7 +93,16 @@ add_library(telega_core STATIC
     app/tg_session.cpp
     app/terminal_prompter.cpp
     app/telegram_cmds.cpp
-    app/commands.cpp)
+    app/maint_session.cpp
+    app/cmd_fsck.cpp
+    app/cmd_recover.cpp
+    app/commands.cpp
+    app/ctl_proto.cpp
+    app/ctl_socket.cpp
+    app/ctl_client.cpp
+    app/ctl_handlers.cpp
+    app/status.cpp
+    app/cmd_maint.cpp)
 target_include_directories(telega_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_BINARY_DIR}/generated")

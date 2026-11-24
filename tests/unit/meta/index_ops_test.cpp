@@ -531,14 +531,42 @@ TEST_F(IndexOps, CompactionCandidatesAndExtents) {
 }
 
 TEST_F(IndexOps, FindChunkByMacOnlyPositional) {
+    const int64_t f = create(kRootIno, "dedup");
     w([&](Db& db) {
         const int64_t a = new_chunk(db, 100, kGen);
         const int64_t p = new_chunk(db, 100, kGen, ChunkKind::pack);
+        put_extent(db, {f, 0, a, 0, 100}, kGen);
+        put_extent(db, {f, 1, p, 0, 100}, kGen);
         const auto found = find_chunk_by_mac(db, test::mac_of(a), 100);
         ASSERT_TRUE(found);
         EXPECT_EQ(found->chunk_id, a);
         EXPECT_FALSE(find_chunk_by_mac(db, test::mac_of(a), 101));
         EXPECT_FALSE(find_chunk_by_mac(db, test::mac_of(p), 100)) << "packs are not deduplicated";
+    });
+}
+
+TEST_F(IndexOps, FindChunkByMacIgnoresDeadChunks) {
+    // Мёртвый чанк (refcount = 0) не находится: его сообщение могла удалить уборка (SPEC 8.1).
+    const int64_t f = create(kRootIno, "dedup");
+    w([&](Db& db) {
+        const int64_t a = new_chunk(db, 100, kGen);
+        EXPECT_FALSE(find_chunk_by_mac(db, test::mac_of(a), 100)) << "no extents yet";
+        put_extent(db, {f, 0, a, 0, 100}, kGen);
+        EXPECT_TRUE(find_chunk_by_mac(db, test::mac_of(a), 100));
+        drop_extents_from(db, f, 0, kGen);
+        EXPECT_FALSE(find_chunk_by_mac(db, test::mac_of(a), 100)) << "refcount fell to 0";
+    });
+}
+
+TEST_F(IndexOps, FindChunkByMacIgnoresZeroMac) {
+    // fsck --repair ставит битым чанкам нулевой content_mac (SPEC 12.3): они не находятся.
+    w([&](Db& db) {
+        const int64_t a = new_chunk(db, 100, kGen);
+        Stmt st{db, "UPDATE chunks SET content_mac = zeroblob(32) WHERE chunk_id = ?"};
+        st.bind(1, a).run();
+        const Bytes zero(32, std::byte{0});
+        EXPECT_FALSE(find_chunk_by_mac(db, zero, 100));
+        EXPECT_FALSE(find_chunk_by_mac(db, Bytes(31, std::byte{1}), 100)) << "not a MAC";
     });
 }
 

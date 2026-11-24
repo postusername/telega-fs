@@ -125,10 +125,11 @@ std::string describe(const meta::MountError& e) {
         case MountErrorKind::bad_key_source:
             return std::string("key source mismatch: ") + e.what();
         case MountErrorKind::no_head:
-            return std::string("the channel has no file system head: ") + e.what() +
-                   " (run `telega-fs init` first)";
+            return std::string("the channel has no file system head: ") + e.what();
         case MountErrorKind::not_index_blob:
             return std::string("the channel head is not an index blob: ") + e.what();
+        case MountErrorKind::head_lost:
+            return std::string("the file system head was lost: ") + e.what();
         case MountErrorKind::corrupt:
             return std::string("the channel data is corrupted or was tampered with: ") + e.what();
         case MountErrorKind::foreign_fs:

@@ -181,7 +181,11 @@ int64_t alloc_chunk_id(Db& db);
 // Вставить строку чанка с refcount = 0, live_bytes = 0, dead_since_gen = base_gen.
 void insert_chunk(Db& db, const NewChunk& chunk, int64_t base_gen);
 std::optional<Chunk> get_chunk(Db& db, int64_t chunk_id);
-// Позиционный чанк с тем же content_mac и plain_size (дедупликация, SPEC 6.5: только kind 1).
+// Живой (refcount > 0) позиционный чанк с тем же content_mac и plain_size (дедупликация, SPEC 8.1,
+// шаг 2; SPEC 6.5: только kind 1). Мёртвый чанк не находится: его сообщение могла удалить уборка,
+// а строка осталась в индексе канала.
+// Нулевой MAC (так fsck --repair помечает битые чанки) и MAC не из 32 байт не находятся.
+// Вызывать под блокировкой записи вместе с put_extent, иначе уборка может удалить строку.
 std::optional<Chunk> find_chunk_by_mac(Db& db, ByteSpan mac, int64_t plain_size);
 // Мёртвые чанки (refcount = 0) с dead_since_gen ≤ max_dead_gen, по chunk_id, не больше limit.
 std::vector<Chunk> list_gc_candidates(Db& db, int64_t max_dead_gen, int64_t limit = INT64_MAX);

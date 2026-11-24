@@ -114,6 +114,8 @@ class TelegramStore final : public Store {
     // Ставит подсказку в очередь фонового потока и возвращается сразу (SPEC 8.2).
     void prefetch(const ChunkRef& ref, uint64_t offset, uint64_t len, uint32_t distance) override;
     void delete_messages(std::span<const int64_t> msg_ids) override;
+    // getMessages пачками по kMessagesBatch (fsck, SPEC 12.3); null в ответе — сообщения нет.
+    std::vector<bool> messages_exist(std::span<const int64_t> msg_ids) override;
     std::optional<HeadInfo> read_head() override;
     Bytes read_index(int64_t msg_id) override;
     int64_t put_index(const std::filesystem::path& blob) override;
