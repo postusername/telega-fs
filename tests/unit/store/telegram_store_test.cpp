@@ -2273,6 +2273,9 @@ TEST_F(DirectSchedTest, EvictionBarrierCoversEveryFileIdKnownUnderThePath) {
     EXPECT_EQ(read(*sched, alias, 0, 1000, in(seconds{10})), d.content.substr(0, 1000));
     const std::string path = fake->local_path(d.fid);
     ASSERT_FALSE(path.empty());
+    // Чтение возвращается, как только байты готовы; окно закрывается следом. Пока оно открыто,
+    // вытеснение по праву отказывает.
+    ASSERT_TRUE(wait_for([&] { return sched->stats().active_now == 0; }));
     ASSERT_TRUE(sched->begin_evict(path));
     EXPECT_TRUE(times_out(*sched, alias, 0, 1000));  // второй file_id тоже помечен
     EXPECT_TRUE(times_out(*sched, d.ref(), 0, 1000));

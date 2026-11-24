@@ -437,24 +437,26 @@ class FakeTelegram {  // NOLINT(clang-analyzer-optin.performance.Padding): те�
     void handle(FakeTransport& t, int client, const Json& request) {
         const std::string type = request.value("@type", "");
         std::optional<std::chrono::milliseconds> delay;
-        {
-            const std::lock_guard<std::mutex> lock(mu_);
-            log_.push_back(request);
-            if (dropped_.contains(type)) {
-                return;
-            }
-            if (auto it = faults_.find(type); it != faults_.end() && !it->second.empty()) {
-                Json error = std::move(it->second.front());
-                it->second.pop_front();
-                t.respond(client, request, std::move(error));
-                return;
-            }
-            const bool is_send = type == "sendMessage" || type == "sendMessageAlbum";
-            if (is_send && send_delay_.count() > 0) {
-                delay = send_delay_;
-            }
+        // Запрос попадает в журнал под той же блокировкой, что и его обработка (кроме отправки):
+        // тест, увидевший count("downloadFile") > n, видит и окно этого вызова. Иначе между
+        // записью в журнал и обработкой тест успевал run_downloads() при ещё не открытом окне.
+        std::unique_lock<std::mutex> lock(mu_);
+        log_.push_back(request);
+        if (dropped_.contains(type)) {
+            return;
         }
-        if (type == "sendMessage" || type == "sendMessageAlbum") {
+        if (auto it = faults_.find(type); it != faults_.end() && !it->second.empty()) {
+            Json error = std::move(it->second.front());
+            it->second.pop_front();
+            t.respond(client, request, std::move(error));
+            return;
+        }
+        const bool is_send = type == "sendMessage" || type == "sendMessageAlbum";
+        if (is_send && send_delay_.count() > 0) {
+            delay = send_delay_;
+        }
+        if (is_send) {
+            lock.unlock();
             const int now = ++inflight_;
             int seen = max_inflight_.load();
             while (now > seen && !max_inflight_.compare_exchange_weak(seen, now)) {
@@ -466,7 +468,6 @@ class FakeTelegram {  // NOLINT(clang-analyzer-optin.performance.Padding): те�
             --inflight_;
             return;
         }
-        const std::lock_guard<std::mutex> lock(mu_);
         client_id_ = client;
         handle_other(t, client, request, type);
     }
