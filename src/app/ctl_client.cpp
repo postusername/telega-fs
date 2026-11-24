@@ -35,6 +35,11 @@ std::optional<std::string> exchange(const fs::path& sock, std::string_view reque
         if (n < 0 && errno == EINTR) {
             continue;
         }
+        if (n < 0 && (errno == EPIPE || errno == ECONNRESET)) {
+            // Сервер мог ответить, не дочитав запрос (busy, SPEC 12.4) и закрыть соединение:
+            // ответ уже лежит в сокете, его надо дочитать, а не терять.
+            break;
+        }
         if (n <= 0) {
             throw SysError(errno, "send to the control socket");
         }
@@ -69,6 +74,10 @@ std::optional<std::string> exchange(const fs::path& sock, std::string_view reque
         const ssize_t n = ::recv(fd.get(), buf.data(), buf.size(), 0);
         if (n < 0 && errno == EINTR) {
             continue;
+        }
+        if (n < 0 && errno == ECONNRESET) {
+            break;  // сервер закрыл соединение, не дочитав запрос: что успело прийти, разбирается
+                    // ниже
         }
         if (n < 0) {
             throw SysError(errno, "recv from the control socket");

@@ -146,6 +146,21 @@ TEST(CtlProto, PeerUid) {
 
 // --- сервер ---
 
+// Вызывает f при выходе из области видимости.
+template <class F>
+class Finally {
+  public:
+    explicit Finally(F f) : f_(std::move(f)) {}
+    Finally(const Finally&) = delete;
+    Finally& operator=(const Finally&) = delete;
+    Finally(Finally&&) = delete;
+    Finally& operator=(Finally&&) = delete;
+    ~Finally() { f_(); }
+
+  private:
+    F f_;
+};
+
 struct Gate {
     std::mutex mu;
     std::condition_variable cv;
@@ -287,16 +302,30 @@ TEST(CtlServer, TooManyClientsGetBusy) {
     server.start();
     std::vector<std::thread> threads;
     threads.reserve(2);
+    // Потоки отпускаются и присоединяются при любом выходе из теста, в том числе по ASSERT или
+    // исключению: иначе разрушение joinable std::thread роняет процесс через std::terminate.
+    const Finally joiner([&] {
+        gate.release();
+        for (auto& t : threads) {
+            t.join();
+        }
+    });
     for (int i = 0; i < 2; ++i) {
-        threads.emplace_back([&] { (void)ctl::call(sock, "sync", seconds(20)); });
+        threads.emplace_back([&] {
+            try {
+                (void)ctl::call(sock, "sync", seconds(20));
+            } catch (const std::exception& e) {
+                ADD_FAILURE() << "sync client: " << e.what();
+            }
+        });
     }
     ASSERT_TRUE(gate.wait_entered(2));
-    const auto r = call_now(sock, "status");
-    EXPECT_FALSE(r.ok);
-    EXPECT_EQ(r.code, "busy");
-    gate.release();
-    for (auto& t : threads) {
-        t.join();
+    // Много раз подряд: busy приходит и тогда, когда сервер закрыл соединение раньше, чем клиент
+    // дописал запрос (EPIPE на send).
+    for (int i = 0; i < 50; ++i) {
+        const auto r = call_now(sock, "status");
+        EXPECT_FALSE(r.ok);
+        EXPECT_EQ(r.code, "busy");
     }
 }
 

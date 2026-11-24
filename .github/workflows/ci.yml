@@ -209,10 +209,17 @@ jobs:
         run: tools/ci/check-format.sh
 
   clang-tidy:
+    name: clang-tidy (${{ matrix.shard }}/4)
     needs: tdlib
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    # Файлы делятся на 4 части по хешу пути (стабильно при добавлении файлов): после правки
+    # общих заголовков проверяется всё, и одна задача на 2 vCPU шла 35-40 минут.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     env:
       CC: clang-18
       CXX: clang++-18
@@ -249,8 +256,10 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.CLANG_TIDY_CACHE_DIR }}
-          key: clang-tidy-cache-${{ github.sha }}
-          restore-keys: clang-tidy-cache-
+          key: clang-tidy-cache-${{ matrix.shard }}-${{ github.sha }}
+          restore-keys: |
+            clang-tidy-cache-${{ matrix.shard }}-
+            clang-tidy-cache-
 
       - name: Configure
         run: cmake --preset ci
@@ -283,6 +292,15 @@ jobs:
           else
             git diff -z --name-only --diff-filter=d "$base" HEAD -- 'src/*.cpp' 'tests/*.cpp' > files.bin
           fi
+          # Своя часть: crc32 пути (cksum) по модулю 4.
+          : > shard.bin
+          while IFS= read -r -d '' f; do
+            h=$(printf '%s' "$f" | cksum | cut -d' ' -f1)
+            if (( h % 4 == ${{ matrix.shard }} )); then
+              printf '%s\0' "$f" >> shard.bin
+            fi
+          done < files.bin
+          mv shard.bin files.bin
           tr '\0' '\n' < files.bin
 
       - name: Run clang-tidy
@@ -299,4 +317,4 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ env.CLANG_TIDY_CACHE_DIR }}
-          key: clang-tidy-cache-${{ github.sha }}
+          key: clang-tidy-cache-${{ matrix.shard }}-${{ github.sha }}
