@@ -281,6 +281,12 @@ TEST_F(PackCrash, PermanentErrorLeavesObjectsInTheOverlayUntilTheNextFsync) {
     ASSERT_TRUE(wait_open(v, 3));
     fault_next(StoreOp::put_chunk, FaultAction::permanent);
     EXPECT_THROW(v.fsync(inos[1]), meta::FsError);
+    // fsync просыпается, как только помечен его объект; остальные объекты пакета помечаются
+    // следом тем же потоком заливки.
+    const auto marked_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (v.status().failed < 3U && std::chrono::steady_clock::now() < marked_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
     EXPECT_EQ(v.status().failed, 3U);
     EXPECT_EQ(v.status().dirty_chunks, 3U);
     EXPECT_FALSE(v.status().fatal);
