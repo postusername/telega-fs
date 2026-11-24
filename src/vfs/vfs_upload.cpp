@@ -830,6 +830,11 @@ void Vfs::upload_chunk(const ChunkKey& key) {
                 return clean_now;
             });
             if (clean) {
+                if (deduped) {
+                    // До finish_upload: он будит fsync, и тот должен видеть счётчик уже
+                    // увеличенным.
+                    deduped_.fetch_add(1);
+                }
                 overlay_->finish_upload(key, inc, ver, *clean, deduped ? 0 : chunk_id);
                 applied = true;
             }
@@ -851,7 +856,6 @@ void Vfs::upload_chunk(const ChunkKey& key) {
         return;
     }
     if (deduped) {
-        deduped_.fetch_add(1);
         finish(std::nullopt);
         return;  // залитых чанков не прибавилось: коммит по числу чанков не нужен
     }
