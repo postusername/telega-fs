@@ -1,4 +1,4 @@
-// Дельта-журнал (SPEC 6.6, 14): индекс, собранный из снимка и патчей, совпадает с живым
+// Дельта-журнал: индекс, собранный из снимка и патчей, совпадает с живым
 // построчно; порча, перестановка и пропуск элемента цепочки обнаруживаются.
 
 #include <gtest/gtest.h>
@@ -549,7 +549,7 @@ TEST_F(DeltaJournal, CorruptedPatchIsRejectedWithoutCrash) {
 }
 
 TEST_F(DeltaJournal, FailedSnapshotThenDeltaLosesChanges) {
-    // SPEC 7.1: снимок сделан (VACUUM INTO, сессия пересоздана), но залить его не удалось.
+    // Снимок сделан (VACUUM INTO, сессия пересоздана), но залить его не удалось.
     // Дельта от прежнего снимка не содержит изменений до VACUUM INTO.
     const std::filesystem::path old_snapshot = snapshot_;
     create(kRootIno, "before-vacuum");

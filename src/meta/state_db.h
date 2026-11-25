@@ -1,13 +1,13 @@
 #pragma once
 
-// StateStore — локальное состояние state.sqlite (SPEC 6.4): ключи коммита, незалитые патчи,
+// StateStore — локальное состояние state.sqlite: ключи коммита, незалитые патчи,
 // текущая цепочка, overlay (грязные чанки и атрибуты), журнал загрузок, открытый пакет.
 // В облако не попадает.
 //
 // Одно соединение под рекурсивным мьютексом: StateStore можно звать из нескольких потоков,
 // а внутри transaction(fn) — вызывать любые методы того же объекта. Каждый метод без
 // внешней транзакции — отдельная долговечная транзакция (WAL, synchronous = FULL).
-// Порядок блокировок (SPEC 9): мьютекс MetaStore, если нужен, берётся раньше этого.
+// Порядок блокировок: мьютекс MetaStore, если нужен, берётся раньше этого.
 
 #include <chrono>
 #include <cstdint>
@@ -27,7 +27,7 @@
 
 namespace telega::meta {
 
-// Ключи таблицы state (SPEC 6.4).
+// Ключи таблицы state.
 namespace state_key {
 inline constexpr std::string_view fs_uuid = "fs_uuid";                  // BLOB 16 байт
 inline constexpr std::string_view base_generation = "base_generation";  // INTEGER
@@ -37,7 +37,7 @@ inline constexpr std::string_view clean_shutdown = "clean_shutdown";    // INTEG
 inline constexpr std::string_view force_snapshot = "force_snapshot";    // INTEGER 0/1
 inline constexpr std::string_view index_dirty = "index_dirty";          // INTEGER 0/1
 // INTEGER, наносекунды CLOCK_REALTIME: забор патча или фиксация среза последнего успешного
-// коммита (SPEC 6.4); изменённое позже могло не попасть в канал (recover --export-dirty).
+// коммита; изменённое позже могло не попасть в канал (recover --export-dirty).
 inline constexpr std::string_view committed_take_ns = "committed_take_ns";
 }  // namespace state_key
 
@@ -72,7 +72,7 @@ struct UploadRecord {
     int64_t started_ns = 0;
 };
 
-// Объект открытого пакета (SPEC 6.4, 6.5).
+// Объект открытого пакета.
 struct OpenPackRow {
     int64_t ino = 0;
     int64_t version = 0;  // version грязного чанка позиции 0 на момент добавления
@@ -82,11 +82,11 @@ struct OpenPackRow {
 
 class StateStore {
   public:
-    // Создать state.sqlite со схемой 6.4. path не должен существовать.
+    // Создать state.sqlite. path не должен существовать.
     static void create(const std::filesystem::path& path);
-    // Открыть существующий файл. Схема M2 мигрирует: open_pack пересоздаётся (она была пуста),
-    // read_cache добавляется (SPEC 6.4).
-    // migrate = false (--ro): схема не меняется, state.sqlite остаётся нетронутым (SPEC 7.2).
+    // Открыть существующий файл. Старая схема мигрирует: open_pack пересоздаётся (она была пуста),
+    // read_cache добавляется.
+    // migrate = false (--ro): схема не меняется, state.sqlite остаётся нетронутым.
     explicit StateStore(const std::filesystem::path& path, bool migrate = true);
     StateStore(const StateStore&) = delete;
     StateStore& operator=(const StateStore&) = delete;
@@ -95,7 +95,7 @@ class StateStore {
     ~StateStore();
 
     // Выполнить fn() атомарно: одна транзакция BEGIN IMMEDIATE под мьютексом; вложенный
-    // вызов — точка сохранения. Исключение — откат и проброс. Шаг 8 из SPEC 7.1 делается так.
+    // вызов — точка сохранения. Исключение — откат и проброс. Так пишется шаг 8 коммита.
     template <typename F>
     auto transaction(F&& fn) -> std::invoke_result_t<F&> {
         using R = std::invoke_result_t<F&>;
@@ -167,7 +167,7 @@ class StateStore {
     [[nodiscard]] std::vector<UploadRecord> list_uploads();
     void remove_upload(int64_t chunk_id);
 
-    // --- open_pack (SPEC 6.5) ---
+    // --- open_pack ---
     // Вставить или заменить строку объекта.
     void upsert_open_pack(const OpenPackRow& row);
     [[nodiscard]] std::vector<OpenPackRow> list_open_pack();

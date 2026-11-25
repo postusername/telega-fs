@@ -162,9 +162,9 @@ void op_init(void* userdata, fuse_conn_info* conn) {
     auto& impl = *static_cast<Frontend::Impl*>(userdata);
     // Метки времени ФС — наносекунды.
     conn->time_gran = 1;
-    // Чтение (SPEC 9): max_read не ограничиваем. max_readahead не трогаем: ядро берёт минимум из
+    // Чтение: max_read не ограничиваем. max_readahead не трогаем: ядро берёт минимум из
     // него и read_ahead_kb устройства (128 КиБ), так что сервер readahead ядра не поднимет;
-    // чтение вперёд делает ChunkReader (SPEC 8.2).
+    // чтение вперёд делает ChunkReader.
     if ((conn->capable & FUSE_CAP_ASYNC_READ) != 0) {
         conn->want |= FUSE_CAP_ASYNC_READ;
     }
@@ -320,7 +320,7 @@ void op_open(fuse_req_t req, fuse_ino_t ino, fuse_file_info* fi) {
         fi->fh = impl.vfs.open(ino_of(ino), fi->flags);
         fi->direct_io = 0;  // mmap требует обычного режима с кэшем страниц
         // Писатель один, и все изменения идут через ядро этого монтирования: страничный кэш
-        // остаётся верным между открытиями (SPEC 9).
+        // остаётся верным между открытиями.
         fi->keep_cache = 1;
         if (fuse_reply_open(req, fi) != 0) {
             impl.vfs.release(fi->fh);
@@ -497,7 +497,7 @@ void op_statfs(fuse_req_t req, fuse_ino_t /*ino*/) {
     });
 }
 
-// xattr не поддерживаются (SPEC 9). Обработчики намеренно не регистрируются: тогда libfuse
+// xattr не поддерживаются. Обработчики намеренно не регистрируются: тогда libfuse
 // отвечает ENOSYS, ядро запоминает это (no_getxattr и т. п.) и больше не присылает запросы,
 // а приложение получает EOPNOTSUPP (= ENOTSUP). С ответом ENOTSUP ядро спрашивало бы
 // security.capability перед каждой записью.
@@ -601,7 +601,7 @@ void Frontend::serve() {
     }
 #if FUSE_USE_VERSION >= 312
     // Без явного предела libfuse 3.12+ держит не больше 10 рабочих потоков: десять write,
-    // ждущих места в staging (SPEC 8.3), заняли бы их все, и остальные запросы стояли бы до
+    // ждущих места в staging, заняли бы их все, и остальные запросы стояли бы до
     // ENOSPC. Потоки создаются по требованию, поэтому большой предел ничего не стоит в покое.
     fuse_loop_config* config = fuse_loop_cfg_create();
     fuse_loop_cfg_set_clone_fd(config, 1);

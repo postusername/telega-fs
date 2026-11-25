@@ -392,9 +392,9 @@ Config parse_config(std::string_view toml_text, std::string_view source_name) {
                     }
                     it->second(profile, onode, okey.str());
                 }
-                // Значения по умолчанию pack_* зависят от chunk_size (SPEC 6.5: pack_threshold
+                // Значения по умолчанию pack_* зависят от chunk_size (pack_threshold
                 // не больше chunk_size, pack_target не больше chunk_size и не меньше
-                // 2 * pack_threshold). При chunk_size 8MiB это ровно 4MiB и 8MiB из SPEC 12.2.
+                // 2 * pack_threshold). При chunk_size 8MiB это ровно 4MiB и 8MiB.
                 if (!ptable->contains("pack_threshold")) {
                     profile.pack_threshold =
                         std::min(profile.pack_threshold, profile.chunk_size / 2);

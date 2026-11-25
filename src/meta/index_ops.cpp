@@ -567,7 +567,7 @@ std::optional<Chunk> get_chunk(Db& db, int64_t chunk_id) {
 }
 
 std::optional<Chunk> find_chunk_by_mac(Db& db, ByteSpan mac, int64_t plain_size) {
-    // Нулевой MAC fsck --repair ставит битым чанкам (SPEC 12.3): такие чанки не находятся.
+    // Нулевой MAC fsck --repair ставит битым чанкам: такие чанки не находятся.
     // Настоящий MAC нулевым не бывает, но проверка дешевле, чем довериться этому.
     if (mac.size() != 32 ||
         std::all_of(mac.begin(), mac.end(), [](std::byte b) { return b == std::byte{0}; })) {

@@ -1,0 +1,34 @@
+name: Ошибка
+description: Что-то работает не так, как описано в docs/ или docs/SPEC.md
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Уязвимости сюда не пишите: см. SECURITY.md. Перед отправкой уберите из логов токен бота, api_hash, номер телефона, пароли и имена файлов, которые не хотите показывать.
+  - type: textarea
+    id: what
+    attributes:
+      label: Что случилось
+      description: Что делали, что ожидали, что получили.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Как воспроизвести
+      description: Команды по шагам. Воспроизводится ли на `store = "local"`?
+  - type: textarea
+    id: version
+    attributes:
+      label: Версия и окружение
+      description: Вывод `telega-fs --version`, дистрибутив и ядро (`uname -r`), режим (бот или пользователь), хранилище (telegram или local).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи
+      description: Вывод `telega-fs status` и фрагмент `~/.local/share/telega-fs/<профиль>/telega-fs.log` (лучше с `-v`).
+      render: text

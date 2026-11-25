@@ -55,7 +55,7 @@ std::vector<ChainBlob> fetch_or_corrupt(store::Store& store, const crypto::Key& 
     }
 }
 
-// Локальные изменения (SPEC 7.2, шаг 6): overlay не пуст, index_dirty = 1 или есть pending.
+// Локальные изменения: overlay не пуст, index_dirty = 1 или есть pending.
 bool has_local_changes(StateStore& state) {
     return state.get_int_or(state_key::index_dirty, 0) != 0 || !state.list_pending().empty() ||
            !state.list_dirty_chunks().empty() || !state.list_dirty_attrs().empty();
@@ -105,7 +105,7 @@ void write_chain_state(StateStore& state, const std::vector<ChainBlob>& chain,
     state.set_blob(state_key::head_hash, head.hash);
     state.set_int(state_key::index_dirty, 0);
     // Локальный индекс только что равен цепочке головы: всё изменённое позже ещё не в канале
-    // (SPEC 6.4, committed_take_ns).
+    // (committed_take_ns).
     state.set_int(state_key::committed_take_ns,
                   std::chrono::duration_cast<std::chrono::nanoseconds>(
                       std::chrono::system_clock::now().time_since_epoch())
@@ -130,7 +130,7 @@ std::vector<Bytes> patches_after(const std::vector<ChainBlob>& chain, size_t fir
     return out;
 }
 
-// Собрать index.sqlite из цепочки целиком (SPEC 6.6). Порча — MountError(corrupt).
+// Собрать index.sqlite из цепочки целиком. Порча — MountError(corrupt).
 void rebuild_index(const FsPaths& paths, const std::vector<ChainBlob>& chain) {
     const auto snap = paths.tmp() / "chain-snapshot.sqlite";
     remove_quietly(snap);
@@ -144,7 +144,7 @@ void rebuild_index(const FsPaths& paths, const std::vector<ChainBlob>& chain) {
     remove_quietly(snap);
 }
 
-// --discard-local (SPEC 7.2): заменить локальное состояние цепочкой головы, забыв
+// --discard-local: заменить локальное состояние цепочкой головы, забыв
 // незакоммиченное. Порядок важен для сбоя в любой точке: сначала индекс собирается во
 // временный файл и атомарно подменяет index.sqlite (rebuild_index), потом ОДНА транзакция
 // state.sqlite стирает overlay, pending и index_dirty и записывает состояние цепочки, и лишь
@@ -163,7 +163,7 @@ void adopt_chain_discarding_local(StateStore& state, const FsPaths& paths,
     clear_staging(paths);
 }
 
-// Индекса нет (SPEC 7.2, «Локального индекса нет»): выбросить локальные изменения и собрать
+// Локального индекса нет: выбросить локальные изменения и собрать
 // индекс из цепочки. Порядок обратный adopt_chain_discarding_local: старого индекса, которому
 // нужна согласованность до подмены, здесь нет, и перед сборкой должна пройти транзакция
 // state.sqlite. Если пересборка шла бы первой, сбой между ней и транзакцией оставил бы свежий
@@ -181,7 +181,7 @@ void adopt_chain_without_index(StateStore& state, const FsPaths& paths,
     clear_staging(paths);
 }
 
-// Догнать локальный индекс поколения g_l дельтами цепочки (SPEC 7.2, G_r > G_l). false —
+// Догнать локальный индекс поколения g_l дельтами цепочки (G_r > G_l). false —
 // G_l не в этой цепочке или патчи не легли: тогда собирать заново.
 bool catch_up(const FsPaths& paths, const std::vector<ChainBlob>& chain, uint64_t g_l, int64_t h_l,
               ByteSpan hash_l) {
@@ -201,7 +201,7 @@ bool catch_up(const FsPaths& paths, const std::vector<ChainBlob>& chain, uint64_
         }
         {
             // После коммита G_l локальный индекс получил строку index_history для G_l
-            // (служебная запись, SPEC 7.1 шаг 8), которой нет в блобе G_l. Дельта другой
+            // (служебная запись коммита), которой нет в блобе G_l. Дельта другой
             // машины везёт ту же строку, и patchset дал бы конфликт. Строки ≥ G_l
             // восстановятся из цепочки или сверкой с state.chain после монтирования.
             OpenOptions options;
@@ -232,7 +232,7 @@ bool is_interrupted_commit(StateStore& state, const FsPaths& paths, const ChainB
                            int64_t h_l, ByteSpan hash_l) {
     const auto& h = head.header;
     // prev_msg_id проверяется только у дельты: у снимка при mount --force-local это реальная
-    // (откатанная) голова или 0 при потере головы (SPEC 7.2), а не h_l. Снимок узнаётся по телу.
+    // (откатанная) голова или 0 при потере головы, а не h_l. Снимок узнаётся по телу.
     if (h.kind == crypto::BlobKind::delta) {
         if (h.prev_msg_id != h_l || !same_bytes(h.prev_hash, hash_l)) {
             return false;
@@ -249,7 +249,7 @@ bool is_interrupted_commit(StateStore& state, const FsPaths& paths, const ChainB
             return false;
         }
         // Коммит склеил pending по состоянию на свой забор, а промежуточный забор мог дописать
-        // новые патчи, пока блоб заливался (SPEC 6.6): ищем склейку среди префиксов pending.
+        // новые патчи, пока блоб заливался: ищем склейку среди префиксов pending.
         std::vector<Bytes> patches;
         patches.reserve(pending.size());
         for (const auto& p : pending) {
@@ -290,7 +290,7 @@ void replay_commit_state(StateStore& state, const ChainBlob& head) {
 
 // Строки index_history для всех элементов текущей цепочки. Строки головы нет ни в одном
 // блобе (её пишет шаг 8 после коммита), а после сборки из цепочки или сбоя между шагом 8 и
-// записью строки её нет и локально. Без строки старая цепочка не была бы убрана (SPEC 7.4).
+// записью строки её нет и локально. Без строки старая цепочка не была бы убрана.
 void reconcile_history(MetaStore& meta, StateStore& state) {
     const auto chain = state.list_chain();
     if (chain.empty()) {
@@ -313,7 +313,7 @@ void reconcile_history(MetaStore& meta, StateStore& state) {
         WriteKind::housekeeping);
 }
 
-// SPEC 7.2, шаг 7: сироты upload_journal.
+// Сироты upload_journal: чанки, на которые не ссылается ни индекс, ни overlay.
 void cleanup_orphans(store::Store& store, MetaStore& meta, StateStore& state, MountReport& rep) {
     std::vector<UploadRecord> orphans;  // у всех есть msg_id
     for (const auto& rec : state.list_uploads()) {
@@ -350,7 +350,7 @@ void cleanup_orphans(store::Store& store, MetaStore& meta, StateStore& state, Mo
     }
 }
 
-// SPEC 7.2, шаг 8: inode с parent IS NULL — файлы, удалённые при открытом дескрипторе.
+// inode с parent IS NULL — файлы, удалённые при открытом дескрипторе.
 void delete_detached(MetaStore& meta, StateStore& state, const FsPaths& paths, MountReport& rep) {
     const int64_t g = state.get_int_or(state_key::base_generation, 0);
     for (const int64_t ino : meta.read([](Db& db) { return list_detached(db); })) {
@@ -383,7 +383,7 @@ void cleanup_tmp(const FsPaths& paths) {
     }
 }
 
-// Keyring профиля, если он читается и в нём есть ФС (SPEC 11): без него ключей локального индекса
+// Keyring профиля, если он читается и в нём есть ФС: без него ключей локального индекса
 // нет, и потерянную голову не восстановить. Порча keyring здесь не ошибка (ниже её разберёт
 // основной путь), а «локального состояния нет».
 std::optional<crypto::KeyringFile> local_keyring_with_fs(const FsPaths& paths) {
@@ -455,7 +455,7 @@ void MountedFs::unmount() {
         } catch (const store::CrashInjected&) {
             throw;
         } catch (const std::exception& e) {
-            // SPEC 7.2: разбор до конца, ошибку получает вызывающий после остановки.
+            // Разбор идёт до конца, ошибку получает вызывающий после остановки.
             spdlog::warn("unmount: final commit failed: {}", e.what());
             failure = e.what();
         }
@@ -463,7 +463,7 @@ void MountedFs::unmount() {
     committer_->stop();
     if (!ro_mount_) {
         if (failure) {
-            // SPEC 7.2: записи, не забранные из сессии в pending_patchsets, пропадают вместе с
+            // Записи, не забранные из сессии в pending_patchsets, пропадают вместе с
             // ней, и следующая дельта их бы не содержала. force_snapshot ставится строго до
             // clean_shutdown = 1: иначе сбой между записями дал бы «чистое» состояние без флага.
             state_->set_int(state_key::force_snapshot, 1);
@@ -478,8 +478,8 @@ void MountedFs::unmount() {
 namespace {
 
 // Голова канала для монтирования. Если локально известна голова H (индекс и состояние на месте),
-// а канал отдал «нет головы» или голову старше H, это, скорее всего, кэш TDLib (SPEC 2, 7.2
-// шаг 4): чтение повторяется в пределах options.stale_head_window. Иначе ответ берётся как есть.
+// а канал отдал «нет головы» или голову старше H, это, скорее всего, кэш TDLib: чтение повторяется
+// в пределах options.stale_head_window. Иначе ответ берётся как есть.
 std::optional<store::HeadInfo> read_head_for_mount(store::Store& store, const FsPaths& paths,
                                                    const MountOptions& options) {
     auto head = store.read_head();
@@ -503,8 +503,8 @@ std::optional<store::HeadInfo> read_head_for_mount(store::Store& store, const Fs
         if (head->msg_id >= local_head) {
             return false;
         }
-        // Старое сообщение, не блоб индекса, — не кэш нашей головы, а чужой закреп (SPEC 7.2,
-        // потеря головы): ждать нечего.
+        // Старое сообщение, не блоб индекса, — не кэш нашей головы, а чужой закреп (потеря головы):
+        // ждать нечего.
         try {
             (void)crypto::parse_index_header(head->header);
             return true;
@@ -547,10 +547,10 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
             head_is_index = false;
         }
     }
-    // Потеря головы (SPEC 7.2): закреплённого нет или закреплено не блоб индекса. С живым
-    // локальным индексом это отдельная строка таблицы: отказ с вариантами --ro и --force-local.
+    // Потеря головы: закреплённого нет или закреплено не блоб индекса. С живым
+    // локальным индексом это отдельная ситуация: отказ с вариантами --ro и --force-local.
     // Без локального индекса монтировать нечего: подсказка про init (поиска головы перебором
-    // истории в v1 нет, issue #1).
+    // истории нет).
     const bool head_lost = !head_is_index;
     if (head_lost) {
         const std::string why =
@@ -567,7 +567,7 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     }
     const FsUuid fs_uuid = claimed.fs_uuid;
 
-    // Шаг 1: ключи. Есть keyring с ФС — им; keyring без ФС (login до init, SPEC 11) даёт только
+    // Шаг 1: ключи. Есть keyring с ФС — им; keyring без ФС (login до init) даёт только
     // tdlib_db_key и KEK, а master_key разворачивается из головы канала; keyring нет — KDF и
     // wrapped_master тоже из заголовка головы.
     std::optional<crypto::KeyringFile> keyring;  // с ФС
@@ -594,7 +594,7 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     if (!keyring && kdf.alg == crypto::KdfAlg::argon2id13 &&
         (kdf.opslimit > crypto_pwhash_OPSLIMIT_SENSITIVE ||
          kdf.memlimit > crypto_pwhash_MEMLIMIT_SENSITIVE)) {
-        // Заголовок до расшифровки не аутентифицирован (SPEC 11): подложенный блоб не должен
+        // Заголовок до расшифровки не аутентифицирован: подложенный блоб не должен
         // заставлять Argon2 выделять произвольную память или считать произвольно долго.
         throw MountError(MountErrorKind::corrupt,
                          "KDF parameters in the head header exceed the allowed limits");
@@ -604,7 +604,7 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     std::optional<crypto::Key> bare_kek;  // KEK keyring без ФС: им обернётся master_key
     if (bare) {
         // Пароль должен подойти к обоим: к keyring (по wrapped_tdlib) и к голове канала. Вид
-        // источника (пароль или keyfile) тоже один на оба (SPEC 11).
+        // источника (пароль или keyfile) тоже один на оба.
         const bool keyfile_given = !options.key.keyfile.empty();
         const bool keyring_keyfile = bare->kdf.alg == crypto::KdfAlg::keyfile;
         if (keyfile_given != keyring_keyfile) {
@@ -659,12 +659,12 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
         head = open_head(sub.index, fs_uuid, head_info->msg_id, head_blob);
     }
     const uint64_t g_r = head.header.generation;
-    // Голова подлинная. keyring с ФС сохраняется позже, после проверки локального состояния
-    // (SPEC 11): иначе он привязался бы к ФС, с которой профиль всё равно не смонтируется. В
-    // --ro keyring не меняется вовсе, master_key остаётся только в памяти (SPEC 7.2).
+    // Голова подлинная. keyring с ФС сохраняется позже, после проверки локального состояния,
+    // иначе он привязался бы к ФС, с которой профиль всё равно не смонтируется. В
+    // --ro keyring не меняется вовсе, master_key остаётся только в памяти.
     std::optional<crypto::KeyringFile> keyring_to_save;
     if (bare) {
-        // master_key обёрнут KEK этого keyring (SPEC 11). Блобы дальше несут KDF и
+        // master_key обёрнут KEK этого keyring. Блобы дальше несут KDF и
         // wrapped_master из keyring, как при обычном пути.
         keyring_to_save = crypto::attach_fs(*bare, fs_uuid, *bare_kek, *master);
         kdf = keyring_to_save->kdf;
@@ -682,7 +682,7 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     if (!std::filesystem::exists(paths.state_db())) {
         StateStore::create(paths.state_db());
     }
-    // --ro: схема не мигрируется, state.sqlite не меняется (SPEC 7.2).
+    // --ro: схема не мигрируется, state.sqlite не меняется.
     auto state = std::make_unique<StateStore>(paths.state_db(), !ro);
     if (const auto local_uuid = state->get_blob(state_key::fs_uuid);
         local_uuid && !same_bytes(*local_uuid, fs_uuid)) {
@@ -694,7 +694,7 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
     rep.unclean_shutdown = state->get_int(state_key::clean_shutdown) == std::optional<int64_t>{0};
     // Локального индекса нет, а локальные изменения есть: overlay и патчи без индекса
     // истолковать нельзя. Молча выбрасывать их нельзя (и тем более при --ro, который ничего
-    // не меняет локально, SPEC 7.2), поэтому это такой же конфликт, как G_r > G_l с
+    // не меняет локально), поэтому это такой же конфликт, как G_r > G_l с
     // локальными изменениями: отказ, а выбросить их можно только явным --discard-local.
     bool discard_orphaned = false;
     if (!have_index && has_local_changes(*state)) {
@@ -742,7 +742,7 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
             }
         }
         if (ro) {
-            // Монтируется локальный индекс как есть, ничего не меняется (SPEC 7.2, --ro).
+            // Монтируется локальный индекс как есть, ничего не меняется (--ro).
             rep.situation = MountSituation::local_read_only;
         } else if (options.force_local) {
             // Следующий коммит — снимок локального индекса с generation G_l + 1; CAS ждёт «головы
@@ -800,7 +800,7 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
                     "the channel is at generation " + std::to_string(g_r) +
                         ", but local changes on top of generation " + std::to_string(g_l) +
                         " are not committed: mount with --ro, or with --discard-local to drop "
-                        "them, or save them with 'recover --export-dirty' (M4)");
+                        "them, or save them with 'recover --export-dirty'");
             }
         } else {
             const auto chain = fetch_or_corrupt(store, sub.index, fs_uuid, head.msg_id, head_blob);
@@ -837,7 +837,8 @@ std::unique_ptr<MountedFs> mount_fs(store::Store& store, const FsPaths& paths,
 
     if (!ro) {
         if (rep.unclean_shutdown) {
-            state->set_int(state_key::force_snapshot, 1);  // шаг 5 (SPEC 6.6)
+            // После нечистого завершения следующий блоб — снимок.
+            state->set_int(state_key::force_snapshot, 1);
         }
         if (!state->get_blob(state_key::fs_uuid)) {
             state->set_blob(state_key::fs_uuid, fs_uuid);

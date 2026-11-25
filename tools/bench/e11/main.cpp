@@ -1,4 +1,4 @@
-// tgfs-e11: эксперимент E11 «Снимок без блокировки записи» (SPEC 17.14).
+// tgfs-e11: эксперимент E11 «Снимок без блокировки записи».
 // Запуск и методика — docs/experiments/12-e11-snapshot.md.
 
 #include <CLI/CLI.hpp>
@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
     std::string out;
     std::string corpora;
     std::string variants;
-    CLI::App app{"tgfs-e11: snapshot of index.sqlite without blocking writes (SPEC 17.14)"};
+    CLI::App app{"tgfs-e11: snapshot of index.sqlite without blocking writes"};
     app.require_subcommand(1);
     app.add_option("--work", work, "scratch directory for temporary data")->required();
     app.add_option("--out", out, "directory for CSV files")->required();
@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
     if (o.repeats < 3) {
-        std::cerr << "repeats must be >= 3 (SPEC 17.2)\n";
+        std::cerr << "repeats must be >= 3\n";
         return 2;
     }
     o.work = work;

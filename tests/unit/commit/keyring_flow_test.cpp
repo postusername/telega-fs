@@ -1,4 +1,4 @@
-// Keyring до init (SPEC 11): login создаёт keyring без ФС, init дописывает ФС, монтирование на
+// Keyring до init: login создаёт keyring без ФС, init дописывает ФС, монтирование на
 // новой машине разворачивает master_key из головы канала и сохраняет его.
 
 #include <gtest/gtest.h>
@@ -128,7 +128,7 @@ TEST_F(KeyringFlow, FailedInitRestoresBareKeyring) {
     EXPECT_TRUE(crypto::keyring_has_fs(crypto::load_keyring(a_.keyring())));
 }
 
-// --- прерванный init (SPEC 12.3) ---
+// --- прерванный init ---
 
 // init падает между записью keyring с ФС и pin: keyring уже с ФС, головы в канале нет.
 // Повтор (воспроизведение ревьюера) раньше отказывал навсегда.
@@ -292,7 +292,7 @@ TEST_F(KeyringFlow, MountWithBareKeyringNeedsPasswordFittingBoth) {
     EXPECT_FALSE(std::filesystem::exists(b_.index_db()));
 }
 
-// --- --ro и порядок сохранения keyring (SPEC 7.2, 11) ---
+// --- --ro и порядок сохранения keyring ---
 
 TEST_F(KeyringFlow, ReadOnlyMountKeepsBareKeyringUntouched) {
     init_fs(*store_, a_, init_with(init_options(), "pw"));
@@ -367,7 +367,7 @@ TEST_F(KeyringOrder, ForeignLocalStateWithoutKeyringDoesNotCreateOne) {
     EXPECT_FALSE(std::filesystem::exists(b_.keyring()));
 }
 
-// --- пароль и keyfile одни на keyring и ФС (SPEC 11) ---
+// --- пароль и keyfile одни на keyring и ФС ---
 
 TEST_F(KeyringFlow, KeyringWithKeyfileAndFsWithPassphraseGivesAClearMessage) {
     init_fs(*store_, a_, init_with(init_options(), "pw"));

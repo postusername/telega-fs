@@ -1,4 +1,4 @@
-// tgfs-e8: эксперимент E8 «Инлайн» (SPEC 17.11). Методика и результаты —
+// tgfs-e8: эксперимент E8 «Инлайн». Методика и результаты —
 // docs/experiments/08-e8-inline.md.
 
 #include <CLI/CLI.hpp>
@@ -23,17 +23,17 @@ int main(int argc, char** argv) {
     std::string hist_dataset;
     std::string hist_out;
     bool small_only = false;
-    CLI::App app{"tgfs-e8: inline files (SPEC 17.11)"};
+    CLI::App app{"tgfs-e8: inline files"};
     app.require_subcommand(1);
     app.add_option("--work", work, "scratch directory for temporary data")->required();
     app.add_option("--out", out, "directory for CSV files")->required();
     app.add_option("--c1-dir", c1_dir, "unpacked C1 (tools/bench/corpora/fetch-c1.sh)");
     app.add_option("--c2-sizes", c2_sizes, "c2-sizes.csv (tools/bench/corpora)");
     app.add_option("--seed", o.seed, "seed of all pseudo-random choices");
-    app.add_option("--pack-threshold", o.pack_threshold, "bytes (SPEC 12.2, E9: 4 MiB)");
-    app.add_option("--pack-target", o.pack_target, "bytes (SPEC 12.2, E9: 16 MiB)");
+    app.add_option("--pack-threshold", o.pack_threshold, "bytes (E9: 4 MiB)");
+    app.add_option("--pack-target", o.pack_target, "bytes (E9: 16 MiB)");
 
-    auto* index = app.add_subcommand("index", "snapshots and deltas of the index (SPEC 17.11)");
+    auto* index = app.add_subcommand("index", "snapshots and deltas of the index");
     index->add_option("--datasets", datasets, "c1,c2,c4-100000,c4-1000000 (default: all)");
     index->add_option("--inline-max", inline_maxes, "list, e.g. 0,1KiB,2KiB,4KiB,8KiB,16KiB");
     index->add_option("--budgets", budgets, "inline_budget list, e.g. 4MiB,16MiB,64MiB");
@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
     if (o.repeats < 3) {
-        std::cerr << "repeats must be >= 3 (SPEC 17.2)\n";
+        std::cerr << "repeats must be >= 3\n";
         return 2;
     }
     o.work = work;

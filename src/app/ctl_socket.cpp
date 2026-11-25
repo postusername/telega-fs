@@ -164,7 +164,7 @@ void CtlServer::start() {
         throw SysError(errno, "bind " + path_.string());
     }
     // Каталог data имеет права 0700, поэтому окно между bind и chmod недоступно другим
-    // пользователям; права сокета при этом всё равно 0600 (SPEC 12.4).
+    // пользователям; права сокета при этом всё равно 0600.
     if (::chmod(path_.c_str(), 0600) != 0) {
         const int err = errno;
         ::unlink(path_.c_str());

@@ -1,4 +1,4 @@
-// fsx на смонтированной ФС (SPEC 14, веха M1): не меньше 100 000 операций без расхождений и
+// fsx на смонтированной ФС не меньше 100 000 операций без расхождений и
 // прогон с перемонтированием посередине. Длинные прогоны — в наборе FuseFsxLong (метка long).
 
 #include <gtest/gtest.h>
@@ -86,7 +86,7 @@ TEST_F(FuseFsxTest, Fsx10kOps) {
 // Длинные прогоны: метка long, большой таймаут (tests/integration/CMakeLists.txt).
 class FuseFsxLong : public FuseFsxTest {};
 
-// Критерий M1: 100 000 операций без расхождений.
+// 100 000 операций без расхождений.
 TEST_F(FuseFsxLong, Fsx100kOps) {
     env_ = std::make_unique<Env>();
     env_->init();
@@ -98,7 +98,7 @@ TEST_F(FuseFsxLong, Fsx100kOps) {
     EXPECT_TRUE(m->unmount().ok());
 }
 
-// Критерий M1: перемонтирование посередине прогона сохраняет данные.
+// Перемонтирование посередине прогона сохраняет данные.
 TEST_F(FuseFsxLong, Fsx50kOpsWithRemount) {
     env_ = std::make_unique<Env>();
     env_->init();

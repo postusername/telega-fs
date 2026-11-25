@@ -19,7 +19,7 @@ class FsError : public std::runtime_error {
 };
 
 // Индекс или дельта-журнал испорчены: конфликт при применении патча, проваленная
-// foreign_key_check или integrity_check, нарушенный инвариант схемы (SPEC 6.6, 7.2).
+// foreign_key_check или integrity_check, нарушенный инвариант схемы.
 class IndexCorrupt : public std::runtime_error {
   public:
     using std::runtime_error::runtime_error;

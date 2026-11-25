@@ -25,7 +25,7 @@ telega_module_tests(telega_app_tests telega_config
 telega_module_tests(telega_app_cmd_tests telega_core
     unit/app/telegram_cmds_test.cpp)
 
-# Управляющий сокет и status (SPEC 12.3, 12.4).
+# Управляющий сокет и status.
 telega_module_tests(telega_ctl_tests telega_core
     unit/app/ctl_test.cpp)
 
@@ -45,7 +45,6 @@ telega_module_tests(telega_td_tests telega_td
 telega_module_tests(telega_store_tests telega_store
     unit/store/local_dir_store_test.cpp)
 
-# Блок ведёт исполнитель TelegramStore.
 telega_module_tests(telega_tgstore_tests telega_tgstore
     unit/store/rate_limiter_test.cpp
     unit/store/read_cache_test.cpp
@@ -60,7 +59,6 @@ telega_module_tests(telega_meta_tests telega_meta
     unit/meta/snapshot_test.cpp
     unit/meta/state_db_test.cpp)
 
-# Блок ведёт исполнитель commit.
 telega_module_tests(telega_commit_tests telega_commit
     unit/commit/commit_test.cpp
     unit/commit/mount_test.cpp
@@ -70,7 +68,6 @@ telega_module_tests(telega_commit_tests telega_commit
     unit/commit/fault_test.cpp
     unit/commit/snapshot_commit_test.cpp)
 
-# Блок ведёт исполнитель vfs.
 telega_module_tests(telega_vfs_tests telega_vfs
     unit/vfs/vfs_test.cpp
     unit/vfs/vfs_data_test.cpp
@@ -105,12 +102,18 @@ telega_module_tests(telega_vfs_tg_tests telega_vfs
 target_link_libraries(telega_vfs_tg_tests PRIVATE telega_tgstore)
 
 # Бинарник собирается и запускается во всех пресетах. Это единственный тест, который вызывает
-# TDLib (синхронный td_execute, без потоков TDLib), в том числе под санитайзерами.
+# TDLib (синхронный td_execute, без потоков TDLib), в том числе под санитайзерами. В сборке
+# без TDLib бинарник печатает «TDLib none».
+if(TELEGA_FS_WITH_TDLIB)
+    set(_expected_tdlib "${Td_VERSION}")
+else()
+    set(_expected_tdlib none)
+endif()
 add_test(NAME telega_fs.version
     COMMAND "${PROJECT_SOURCE_DIR}/tools/ci/check-version.sh" $<TARGET_FILE:telega-fs>
-            "${Td_VERSION}")
+            "${_expected_tdlib}")
 
-# SPEC 15.4: динамически линкуемся только с разрешённым списком библиотек.
+# Динамически линкуемся только с разрешённым списком библиотек (tools/ci/check-linkage.sh).
 set(_linkage_args "")
 string(TOUPPER "${CMAKE_BUILD_TYPE}" _build_type)
 if("${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${_build_type}}" MATCHES "-fsanitize=")

@@ -1,4 +1,4 @@
-// PackWriter (SPEC 6.5, 8.1): выбор класса хранения, закрытие пакета по каждому условию,
+// PackWriter: выбор класса хранения, закрытие пакета по каждому условию,
 // fsync нескольких файлов одного пакета, мёртвые и изменившиеся объекты, чтение из пакета,
 // перезапуск с открытым пакетом, параллельность с позиционными загрузками.
 
@@ -130,7 +130,7 @@ class VfsPack : public ::testing::Test {
     VfsEnv env;
 };
 
-// --- классы хранения (SPEC 6.5) ---
+// --- классы хранения ---
 
 struct Transition {
     size_t from;
@@ -428,7 +428,7 @@ TEST_F(VfsPack, ShutdownUploadsTheOpenPack) {
     EXPECT_EQ(env.read_all(fb), b);
 }
 
-// Давление на staging (SPEC 8.3) закрывает открытый пакет публичным методом.
+// Давление на staging закрывает открытый пакет публичным методом.
 TEST_F(VfsPack, CloseOpenPackForStagingPressure) {
     EXPECT_FALSE(v().close_open_pack());  // пакет пуст
     const Bytes a = pattern(kPackSize, 1);
@@ -773,7 +773,7 @@ TEST(VfsPackParallel, PackAndPositionalChunkUploadConcurrently) {
 }
 
 // Пакет заливается обычным put_chunk, поэтому годится для альбома: размер файла пакета — это
-// размер чанка по формату раздела 5.
+// размер чанка по формату чанка.
 TEST_F(VfsPack, PackIsAnOrdinaryChunk) {
     GateStore gate(*env.store);
     env.vfs.reset();
@@ -790,7 +790,7 @@ TEST_F(VfsPack, PackIsAnOrdinaryChunk) {
     env.override_store = nullptr;
 }
 
-// --- уплотнение пакетов (SPEC 6.5) ---
+// --- уплотнение пакетов ---
 
 class VfsCompact : public VfsPack {
   protected:
@@ -1087,7 +1087,7 @@ TEST_F(VfsPack, RewriteAfterTruncateIsNotMistakenForTheObjectOfTheClosedPack) {
     EXPECT_TRUE(env.accounting_ok());
 }
 
-// Спрос от fsync привязан к файлу (SPEC 6.5): fsync одного файла закрытого пакета не заставляет
+// Спрос от fsync привязан к файлу: fsync одного файла закрытого пакета не заставляет
 // заново запечатывать и сразу заливать другой его файл, изменившийся за время заливки.
 TEST_F(VfsPack, FsyncOfOneFileDoesNotForceTheChangedNeighbourOutOfTheOpenPack) {
     GateStore gate(*env.store);

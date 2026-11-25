@@ -1,5 +1,5 @@
-// tgfs-bench: замеры через TdClient против тестового DC (SPEC 17.2).
-// По умолчанию боевые серверы, --test-dc включает тестовый DC (SPEC 17.2). Секреты не печатаются.
+// tgfs-bench: замеры через TdClient против тестового DC.
+// По умолчанию боевые серверы, --test-dc включает тестовый DC. Секреты не печатаются.
 
 #include <CLI/CLI.hpp>
 
@@ -14,7 +14,7 @@ int main(int argc, char** argv) {
     BenchOptions options = BenchOptions::defaults();
     int exit_code = 0;
 
-    CLI::App app{"tgfs-bench: experiments against the Telegram test DC (SPEC 17.2)"};
+    CLI::App app{"tgfs-bench: experiments against the Telegram test DC"};
     app.require_subcommand(1);
     app.fallthrough();
     app.add_option("--creds", options.creds,

@@ -1,8 +1,8 @@
 #pragma once
 
-// LocalDirStore: канал в локальном каталоге, с инъекцией сбоев (SPEC 3, 14).
+// LocalDirStore: канал в локальном каталоге, с инъекцией сбоев.
 //
-// Статистика чтения (SPEC 14, приёмка M3). Объект считает успешные вызовы read_range и байты в них
+// Статистика чтения. Объект считает успешные вызовы read_range и байты в них
 // (сумма out.size()), а также вызовы prefetch и запрошенные в них байты (сама подсказка ничего не
 // читает). Счётчики ведутся с создания объекта и между запусками не накапливаются. Снимок
 // записывается в файл <dir>/stats при создании и после каждого вызова read_range и prefetch, чтобы
@@ -83,10 +83,10 @@ struct FaultRule {
     uint64_t bytes_per_sec = 0;  // для FaultAction::bandwidth
 };
 
-// Переменная окружения с правилами сбоев для бинарника (SPEC 3).
+// Переменная окружения с правилами сбоев для бинарника.
 inline constexpr const char* kFaultsEnvVar = "TELEGA_FS_FAULTS";
 
-// Разобрать формат TELEGA_FS_FAULTS (SPEC 3). Ошибка формата — std::invalid_argument.
+// Разобрать формат TELEGA_FS_FAULTS. Ошибка формата — std::invalid_argument.
 std::vector<FaultRule> parse_fault_rules(std::string_view spec);
 
 // Правила из переменной TELEGA_FS_FAULTS; нет переменной — пустой список.
@@ -116,7 +116,7 @@ class LocalDirStore final : public Store {
 
     ChunkRef put_chunk(const std::filesystem::path& encrypted_file) override;
     void read_range(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out) override;
-    // Ничего не скачивает: только считает вызов и байты (SPEC 8.2, 14).
+    // Ничего не скачивает: только считает вызов и байты.
     void prefetch(const ChunkRef& ref, uint64_t offset, uint64_t len, uint32_t distance) override;
     void delete_messages(std::span<const int64_t> msg_ids) override;
     std::vector<bool> messages_exist(std::span<const int64_t> msg_ids) override;

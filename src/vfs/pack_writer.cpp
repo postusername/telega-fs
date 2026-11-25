@@ -1,4 +1,4 @@
-// PackWriter: открытый пакет, закрытие, сборка, заливка и применение (SPEC 6.5, 8.1).
+// PackWriter: открытый пакет, закрытие, сборка, заливка и применение.
 
 #include "vfs/pack_writer.h"
 
@@ -410,7 +410,7 @@ void PackWriter::apply(int64_t chunk_id, const store::ChunkRef& ref, int64_t pla
                 continue;
             }
             // Версия не менялась, поэтому truncate вниз не было; на всякий случай не длиннее
-            // размера: индекс не держит экстент за концом файла (SPEC 6.2).
+            // размера: индекс не держит экстент за концом файла.
             const int64_t len = std::min(p->len, size);
             if (len <= 0) {
                 rejected[p->ino] = Outcome::changed;
@@ -446,7 +446,7 @@ void PackWriter::apply(int64_t chunk_id, const store::ChunkRef& ref, int64_t pla
                 u.size = o.len;
             }
             // ctime — момент привязки пакета в индексе: по нему recover --export-dirty находит
-            // залитое после последнего коммита (SPEC 12.3).
+            // залитое после последнего коммита.
             u.ctime_ns = std::max({o.cur.ctime_ns, o.attrs ? o.attrs->mtime_ns : 0, now_ns()});
             meta::update_attrs(db, o.p->ino, u);
             applied.push_back({o.p, PackedObject{{o.p->ino, 0}, o.p->incarnation, o.p->version}});
@@ -583,7 +583,7 @@ void PackWriter::run(uint64_t seq) {
     };
 
     probe("run");
-    // Место под сборку: открытый текст и зашифрованный файл одновременно (SPEC 8.3). Берётся
+    // Место под сборку: открытый текст и зашифрованный файл одновременно. Берётся
     // целиком и до всех полос, поэтому ожидание не мешает применению других пакетов. Сборка и
     // шифрование идут по одному (stage_mu_); put_chunk — уже без него.
     std::unique_lock stage(stage_mu_);
@@ -615,7 +615,7 @@ void PackWriter::run(uint64_t seq) {
         bool stop = false;
         as = assemble(pack, plain, stop);
         outcomes = as.outcomes;
-        // Пустой staging-файл не заливается: позиция — дыра (SPEC 8.1).
+        // Пустой staging-файл не заливается: позиция — дыра.
         for (const ChunkKey& key : as.empties) {
             const auto view = overlay_.chunk(key);
             if (view) {
@@ -718,7 +718,7 @@ void PackWriter::run(uint64_t seq) {
                 store_.delete_messages(ids);
                 state_.remove_upload(chunk_id);
             } catch (const store::StoreError& e) {
-                // Запись журнала остаётся: сироту уберёт монтирование (SPEC 7.2, шаг 7).
+                // Запись журнала остаётся: сироту уберёт монтирование.
                 spdlog::warn("vfs: deleting unneeded pack {} (msg {}) failed: {}", chunk_id,
                              ref.msg_id, e.what());
             }

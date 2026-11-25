@@ -1,6 +1,6 @@
 #pragma once
 
-// Клиент управляющего сокета (SPEC 12.4) для команд `status` и `sync`: отправить одну
+// Клиент управляющего сокета для команд `status` и `sync`: отправить одну
 // JSON-строку, прочитать одну.
 
 #include <nlohmann/json.hpp>
@@ -13,7 +13,7 @@
 
 namespace telega::app::ctl {
 
-// Ответ сервера, разобранный по SPEC 12.4.
+// Ответ сервера, разобранный из JSON-строки.
 struct Reply {
     bool ok = false;
     nlohmann::json result;  // при ok

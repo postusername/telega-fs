@@ -66,7 +66,7 @@ TgSession::TgSession(const ProfilePaths& paths, bool use_test_dc, const ApiCrede
     make_private_dir(paths.tdlib());
     make_private_dir(paths.tdfiles());
 
-    // SPEC 10.1: setTdlibParameters.
+    // Параметры TDLib (setTdlibParameters).
     params_.use_test_dc = use_test_dc;
     params_.database_directory = paths.tdlib().string();
     params_.files_directory = paths.tdfiles().string();
@@ -122,7 +122,7 @@ void TgSession::close() noexcept {
     }
     try {
         if (runtime_) {
-            runtime_->stop();  // после close(): клиенты не закрываются при stop (SPEC 10.1)
+            runtime_->stop();  // после close(): клиенты не закрываются при stop
         }
     } catch (const std::exception& e) {
         spdlog::warn("stopping the TDLib runtime: {}", e.what());

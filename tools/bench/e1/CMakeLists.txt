@@ -1,4 +1,4 @@
-# E1: размеры патчей дельта-журнала (SPEC 17.4). Гоняется на самом telega-fs с LocalDirStore,
+# E1: размеры патчей дельта-журнала. Гоняется на самом telega-fs с LocalDirStore,
 # TDLib не нужен.
 
 add_executable(tgfs-e1

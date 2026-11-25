@@ -1,4 +1,4 @@
-// e7: размер чанка в режиме бота (SPEC 17.10). Канал создаёт пользователь (setup, сообщений от
+// e7: размер чанка в режиме бота. Канал создаёт пользователь (setup, сообщений от
 // пользователя нет), всю нагрузку несёт бот в отдельном каталоге сессии <state-dir>/bot-e7.
 //
 //   tgfs-bench e7 corpus [--out FILE]  описание набора C3 (размеры файлов) и состав набора E7
@@ -8,17 +8,17 @@
 //   tgfs-bench e7 [--probe] teardown   удалить канал (пользователь) и каталоги сессии бота
 //
 // Серия — это размер чанка S (8, 16, 32, 64 МиБ) и номер повтора. Серия выполняет по порядку:
-//   upload_big    заливка файла big (1 ГиБ, C3) настоящими зашифрованными чанками (SPEC 5);
+//   upload_big    заливка файла big (1 ГиБ, C3) настоящими зашифрованными чанками;
 //   upload_small  заливка первых по порядку C3 файлов 1–10 МиБ на суммарный 1 ГиБ;
 //   dl_big, dl_small   скачивание тех же документов с холодным кэшем (`getMessages` -> file_id,
 //                 `deleteFile`, `downloadFile` целиком), затем расшифровка и сверка с данными;
 //   rmw           100 перезаписей по 4 КиБ в случайных местах файла big: getMessages, скачать чанк
 //                 целиком, расшифровать, изменить, зашифровать заново (новый chunk_id), залить;
 //   cleanup       удаление всех документов серии (старые версии чанков тоже).
-// Заливка идёт по SPEC 10.2: два token bucket (send_rate с всплеском, send_bytes_rate), документы
+// Заливка идёт как в демоне: два token bucket (send_rate с всплеском, send_bytes_rate), документы
 // не больше album_max_doc_size — альбомами по 10 (альбом = 2 действия), остальные по одному,
 // upload_concurrency заданий одновременно, FLOOD_WAIT останавливает все отправки на указанное
-// время плюс джиттер, повторы по правилам раздела (при 429 весь альбом, при 400 только
+// время плюс джиттер, повторы как в демоне (при 429 весь альбом, при 400 только
 // неудавшиеся документы). Содержимое файлов случайное с фиксированным seed.
 //
 // Серии идут по кругу (по повтору на каждый размер), чтобы время суток не смещало один размер.
@@ -87,7 +87,7 @@ constexpr uint64_t kPatchSeed = 0xE7A7C4ULL;
 constexpr uint64_t kRmwPickSeed = 0xE7D1CEULL;
 constexpr uint64_t kC3SizeSeed = 0xC3C3C3C3ULL;
 constexpr uint64_t kPatchSize = 4 * kKiB;
-constexpr int64_t kMaxFloodWaitSeconds = 3600;  // SPEC 17.2: больше часа — остановиться
+constexpr int64_t kMaxFloodWaitSeconds = 3600;  // больше часа — остановиться
 constexpr int kAlbumSize = 10;
 constexpr int kC3Files = 500;
 constexpr int kDeleteBatch = 100;
@@ -135,7 +135,7 @@ struct E7Options {
     uint64_t big_mib = 1024;
     uint64_t small_mib = 1024;
     int rmw_ops = 100;
-    // SPEC 10.2 и 12.2.
+    // Параметры отправки: значения по умолчанию демона.
     int send_rate = 12;
     int send_burst = 5;
     int bytes_rate_mib = 224;
@@ -144,7 +144,7 @@ struct E7Options {
     int download_concurrency = 4;
     int album_max_mib = 8;
     int series_pause_seconds = 300;
-    int lookup_pause_ms = 10000;  // между пачками getMessages по 100 (SPEC 10.2, read_pause)
+    int lookup_pause_ms = 10000;  // между пачками getMessages по 100 (read_pause)
     int delete_interval_ms = 6000;
 };
 
@@ -287,7 +287,7 @@ Crypto load_or_create_crypto(const fs::path& path) {
     return c;
 }
 
-// Зашифровать открытый текст в файл `<dir>/<16 hex>.bin` (формат SPEC 5). Открытый текст
+// Зашифровать открытый текст в файл `<dir>/<16 hex>.bin` (формат чанка). Открытый текст
 // ложится во временный файл: encrypt_chunk_file читает чанк из дескриптора.
 fs::path encrypt_plain_to_document(const fs::path& dir, const Crypto& c, uint64_t chunk_id,
                                    const std::function<void(std::ofstream&)>& write_plain,
@@ -365,7 +365,7 @@ bool same_bytes(const Bytes& got, const std::string& want) {
     return got.size() == want.size() && std::memcmp(got.data(), want.data(), want.size()) == 0;
 }
 
-// ---- Два token bucket (SPEC 10.2) ---------------------------------------------------------
+// ---- Два token bucket ---------------------------------------------------------
 
 class Limiter {
   public:
@@ -1348,7 +1348,7 @@ class Runner {
     };
 
     // Скачивание одного документа целиком; повторяет при FLOOD_WAIT и сетевых ошибках.
-    // После любой ошибки получает file_id заново через getMessages (SPEC 8.2).
+    // После любой ошибки получает file_id заново через getMessages.
     DlResult download_one(size_t chunk_index, RemoteFile rf, ExpClock::time_point t0) {
         DlResult res;
         res.chunk = chunk_index;
@@ -1601,7 +1601,7 @@ class Runner {
 
             const auto wall = WallClock::now();
             const auto t0 = ExpClock::now();
-            // 1. file_id по сообщению (путь пустой БД, SPEC 8.2).
+            // 1. file_id по сообщению (путь пустой БД).
             const td::Json reply = guard_.call("getMessages", [&] {
                 return bot_->client().call(
                     td::Json{{"@type", "getMessages"},
@@ -2115,7 +2115,7 @@ void cmd_teardown(BenchEnv& env, const BenchOptions& options, const E7Options& e
 }  // namespace
 
 void add_e7_command(CLI::App& app, const BenchOptions& options, int* exit_code) {
-    auto* cmd = app.add_subcommand("e7", "Experiment E7: chunk size in bot mode (SPEC 17.10)");
+    auto* cmd = app.add_subcommand("e7", "Experiment E7: chunk size in bot mode");
     cmd->require_subcommand(1);
     auto e7 = std::make_shared<E7Options>();
     e7->out = default_out_dir("07-e7-chunk-size");
@@ -2137,11 +2137,10 @@ void add_e7_command(CLI::App& app, const BenchOptions& options, int* exit_code) 
                           ->capture_default_str();
     auto* rmw_opt = cmd->add_option("--rmw-ops", e7->rmw_ops, "Rewrites of 4 KiB per series")
                         ->capture_default_str();
-    cmd->add_option("--send-rate", e7->send_rate, "Actions per minute (SPEC 10.2)")
-        ->capture_default_str();
+    cmd->add_option("--send-rate", e7->send_rate, "Actions per minute")->capture_default_str();
     cmd->add_option("--send-burst", e7->send_burst, "Burst of the action bucket")
         ->capture_default_str();
-    cmd->add_option("--send-bytes-rate-mib", e7->bytes_rate_mib, "MiB per minute (SPEC 10.2)")
+    cmd->add_option("--send-bytes-rate-mib", e7->bytes_rate_mib, "MiB per minute")
         ->capture_default_str();
     cmd->add_option("--upload-concurrency", e7->upload_concurrency, "Parallel uploads")
         ->capture_default_str();

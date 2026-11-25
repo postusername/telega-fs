@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# clang-tidy по compile_commands.json (SPEC 15.5).
+# clang-tidy по compile_commands.json.
 # usage: run-clang-tidy.sh <build-dir> [file.cpp...]
 # Без списка файлов проверяются все .cpp из src/ и tests/. Любое предупреждение — ошибка.
 # Если задан CLANG_TIDY_CACHE_DIR, чистые результаты кэшируются по ключу из

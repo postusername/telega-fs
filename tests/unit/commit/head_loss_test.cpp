@@ -1,4 +1,4 @@
-// Потеря головы (SPEC 7.2, таблица, две последние строки, и «Особые случаи», --force-local):
+// Потеря головы:
 // закреплённого нет или закреплено не блоб индекса, а локальный индекс жив. Отказ с подсказкой
 // про --ro и --force-local; --ro монтирует локальный индекс; --force-local коммитит его снимком
 // G_l + 1 с CAS «голова пуста» (или «именно это чужое сообщение»), prev_msg_id = 0, и шаг 7 чужое
@@ -258,7 +258,7 @@ TEST_F(HeadLoss, LocalIndexOfAnotherFileSystemUnderOurKeyringIsRefused) {
     EXPECT_EQ(state.get_int_or(state_key::force_snapshot, 0), 0);
 }
 
-// Новое окно кэша TDLib (SPEC 7.2, шаг 4): «головы нет» выдерживается, только если у хранилища
+// Новое окно кэша TDLib: «головы нет» выдерживается, только если у хранилища
 // есть кэш; для LocalDirStore (окно 0) повтора нет — это проверяет число чтений головы.
 class CountingHeadStore final : public store::Store {
   public:
@@ -416,7 +416,7 @@ INSTANTIATE_TEST_SUITE_P(
                (std::get<1>(param_info.param) == LostKind::empty ? "_empty" : "_foreign");
     });
 
-// Неподтверждённый pin (SPEC 7.1, конец): set_head упал транзиентно, pin не прошёл. Следующий
+// Неподтверждённый pin: set_head упал транзиентно, pin не прошёл. Следующий
 // коммит видит прежнюю голову (пусто или чужое), удаляет залитый блоб и повторяет с тем же CAS.
 class UnconfirmedForcePin : public HeadLoss, public ::testing::WithParamInterface<LostKind> {};
 

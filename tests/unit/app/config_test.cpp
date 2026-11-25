@@ -1,4 +1,4 @@
-// config.toml, размеры и интервалы, XDG-пути, flock профиля (SPEC 12).
+// config.toml, размеры и интервалы, XDG-пути, flock профиля.
 
 #include "app/config.h"
 
@@ -213,7 +213,7 @@ read_pause = "6s"
 }
 
 TEST(ConfigParse, PackDefaultsFollowChunkSize) {
-    // Без явных значений pack_* укладываются в маленький chunk_size (SPEC 6.5).
+    // Без явных значений pack_* укладываются в маленький chunk_size.
     const auto small = parse_config("[profiles.a]\nchunk_size = \"1MiB\"\n").profile("a");
     EXPECT_EQ(small.pack_threshold, uint64_t{512} << 10U);
     EXPECT_EQ(small.pack_target, uint64_t{1} << 20U);

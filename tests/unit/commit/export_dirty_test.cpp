@@ -1,4 +1,4 @@
-// recover --export-dirty (SPEC 12.3, 7.2): конфликт G_r > G_l с локальными изменениями, выгрузка
+// recover --export-dirty: конфликт G_r > G_l с локальными изменениями, выгрузка
 // незакоммиченных данных из overlay в каталог. Частично перезаписанный большой файл дочитывается
 // из залитых чанков; без Store и с пропавшими сообщениями неполные файлы перечисляются.
 
@@ -112,7 +112,7 @@ class ExportDirty : public CommitEnv {
             put(v, "committed_only", pattern(kSmall, 5));
             wait_applied(v);  // применение к индексу ставит ctime: сбрасывать время — после него
             // Время закоммиченных файлов — в прошлое: иначе все они попали бы в запас на скачки
-            // часов (5 минут до committed_take_ns, SPEC 12.3).
+            // часов (5 минут до committed_take_ns).
             fs->meta().write([&](meta::Db& db) {
                 db.exec(
                     "UPDATE inodes SET ctime_ns = 1000, mtime_ns = 1000 "
@@ -133,7 +133,7 @@ class ExportDirty : public CommitEnv {
             expected_["/big"].resize(kBigSize + 10);
             std::copy(patch2.begin(), patch2.end(), expected_["/big"].begin() + (kBigSize - 10));
             // Укорочение закоммиченного файла без грязных позиций меняет только индекс, строк
-            // overlay нет: файл находится по ctime (SPEC 12.3, committed_take_ns).
+            // overlay нет: файл находится по ctime (committed_take_ns).
             SetAttr cut;
             cut.size = 1000;
             v.setattr(keepi, cut);
@@ -337,7 +337,7 @@ TEST_F(ExportDirty, NoLocalIndexIsAnError) {
     EXPECT_THROW(export_dirty(a_, store_.get(), keys_, out()), std::runtime_error);
 }
 
-// --- залитое, но не закоммиченное (SPEC 12.3, committed_take_ns) ---
+// --- залитое, но не закоммиченное (committed_take_ns) ---
 
 int64_t wall_now() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -427,7 +427,7 @@ TEST_F(ExportUncommitted, WithoutCommittedTakeTimeTheOverlayAndAllInlineFilesAre
     {
         meta::StateStore state{a_.state_db()};
         ASSERT_TRUE(state.get_int(meta::state_key::committed_take_ns).has_value());
-        state.erase(meta::state_key::committed_take_ns);  // состояние до M4
+        state.erase(meta::state_key::committed_take_ns);  // состояние без ключа committed_take_ns
     }
     const ExportReport report = export_dirty(a_, store_.get(), keys_, out());
     ASSERT_EQ(report.warnings.size(), 1U);
@@ -469,7 +469,7 @@ TEST_F(ExportUncommitted, CommittedTakeTimeIsRecordedByEveryCommit) {
 }
 
 // Каждая операция, меняющая inode, двигает ctime или mtime в индексе (или в dirty_attrs): иначе
-// recover --export-dirty (SPEC 12.3) не нашёл бы файл.
+// recover --export-dirty не нашёл бы файл.
 TEST_F(ExportUncommitted, EveryInodeChangingOperationMovesCtimeOrMtime) {
     init();
     auto fs = mount(a_);

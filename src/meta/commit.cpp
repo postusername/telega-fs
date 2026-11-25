@@ -34,7 +34,7 @@ class RealClock final : public Clock {
     }
 };
 
-// Удаление сообщений и строк уборкой идёт пачками (SPEC 7.4: deleteMessages по 100).
+// Удаление сообщений и строк уборкой идёт пачками (deleteMessages по 100).
 constexpr size_t kDeleteBatch = 100;
 
 nanoseconds since(SteadyClock::time_point start) {
@@ -58,8 +58,8 @@ const char* kind_name(crypto::BlobKind kind) {
     return kind == crypto::BlobKind::snapshot ? "snapshot" : "delta";
 }
 
-// Голова канала совпадает с ожидаемой (SPEC 7.1, шаг 4)?
-// foreign: ожидается чужое сообщение (потеря головы, SPEC 7.2), сверяется только msg_id.
+// Голова канала совпадает с ожидаемой (CAS-проверка, шаг 4)?
+// foreign: ожидается чужое сообщение (потеря головы), сверяется только msg_id.
 bool head_matches(const std::optional<store::HeadInfo>& head, std::optional<int64_t> msg_id,
                   uint64_t generation, bool foreign = false) {
     if (!msg_id) {
@@ -303,7 +303,7 @@ void CommitManager::background_loop() {
                 } else if (now < interval_deadline) {
                     deadline = interval_deadline;
                 } else {
-                    // Интервал вышел. Пока очередь заливки не пуста, откладываем (SPEC 7.1), но
+                    // Интервал вышел. Пока очередь заливки не пуста, откладываем, но
                     // не дольше commit_defer_factor · commit_interval с прошлого коммита.
                     const auto hard_deadline =
                         last_commit_ + config_.commit_interval * config_.commit_defer_factor;
@@ -336,7 +336,7 @@ void CommitManager::background_loop() {
         }
 
         if (take) {
-            // Промежуточный забор (SPEC 6.6): забрать патч, не делая коммит. Ошибка уже в логе и
+            // Промежуточный забор: забрать патч, не делая коммит. Ошибка уже в логе и
             // в retry_at_ (record_failure), следующая попытка — коммит-снимок.
             lock.unlock();
             try {
@@ -436,7 +436,7 @@ bool CommitManager::sleep_for(std::chrono::milliseconds d) {
     return !stopping_;
 }
 
-// Голова, которую мог показать кэш TDLib после нашего pin (SPEC 2, 7.1): нет закреплённого
+// Голова, которую мог показать кэш TDLib после нашего pin: нет закреплённого
 // (404) или более старый блоб этой же ФС. Чужой блоб или более новое поколение — не кэш.
 bool CommitManager::is_stale_own_head(const std::optional<store::HeadInfo>& head,
                                       const CasExpect& expect) const {
@@ -491,8 +491,8 @@ bool CommitManager::cas_with_retry(const std::optional<store::HeadInfo>& first,
     return false;
 }
 
-// Голова для разбора неподтверждённого pin (SPEC 7.1). Пока с попытки pin не прошло
-// cas_retry_window, ответ «нет головы» или «старая голова» — неизвестность (кэш TDLib, SPEC 2):
+// Голова для разбора неподтверждённого pin. Пока с попытки pin не прошло
+// cas_retry_window, ответ «нет головы» или «старая голова» — неизвестность (кэш TDLib):
 // чтение повторяется раз в cas_retry_period, блоб не удаляется. Окно нужно, только если pin мог
 // пройти; после permanent-ошибки set_head — одно чтение. Возвращает последний ответ.
 std::optional<store::HeadInfo> CommitManager::read_head_for_unconfirmed(const Uploaded& up) {
@@ -573,9 +573,9 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
     //
     // Пока голова недоступна, патч здесь не забирается: сессия растёт в памяти, и записи после
     // неподтверждённой попытки живут только в ней. Забирать их в pending_patchsets нельзя:
-    // монтирование узнаёт свой блоб в голове по равенству patchset и склейки pending (SPEC 7.2,
-    // G_r = G_l + 1), лишние патчи сломали бы узнавание. Поэтому и фоновый промежуточный забор
-    // при неподтверждённом pin не делается (take_due, unconfirmed_pin_). Потеря сессии при
+    // монтирование узнаёт свой блоб в голове по равенству patchset и склейки pending (G_r = G_l +
+    // 1), лишние патчи сломали бы узнавание. Поэтому и фоновый промежуточный забор при
+    // неподтверждённом pin не делается (take_due, unconfirmed_pin_). Потеря сессии при
     // размонтировании закрыта иначе: неудачный финальный коммит ставит force_snapshot = 1
     // (MountedFs::unmount), а крах даёт clean_shutdown = 0. Поэтому отдельная пометка «в сессии
     // есть незабранное» в этой ветке не нужна.
@@ -622,7 +622,7 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
     const Bytes head_hash = state_.get_blob(state_key::head_hash).value_or(Bytes{});
     const std::vector<ChainElement> chain = state_.list_chain();
 
-    // Шаг 1: вид блоба (SPEC 6.6).
+    // Шаг 1: вид блоба (снимок или дельта).
     crypto::BlobKind kind = crypto::BlobKind::delta;
     if (forced || chain.empty() || h == 0 || cas_override_) {
         kind = crypto::BlobKind::snapshot;
@@ -675,10 +675,10 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
                     Bytes patch;
                     meta_.with_lock([&] {
                         patch = meta_.take_patchset(&m.take);
-                        up.take_ns = wall_ns();  // SPEC 6.4: committed_take_ns
+                        up.take_ns = wall_ns();  // для committed_take_ns
                         if (!patch.empty() || had_pending) {
                             // Записи после забора попадут в следующий блоб: чанк, умерший в них,
-                            // ещё жив в поколении G+1 (dead_since_gen, SPEC 7.4).
+                            // ещё жив в поколении G+1 (dead_since_gen).
                             base_generation_.store(up.generation);
                         } else {
                             state_.set_int(state_key::index_dirty, 0);  // все записи откатились
@@ -725,7 +725,7 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
             remove_quietly(snap_path);
             {
                 // Читательское соединение снимка и соединение копии открываются заранее, вне
-                // блокировок (SPEC 6.6). Деструктор закрывает читательскую транзакцию и убирает
+                // блокировок. Деструктор закрывает читательскую транзакцию и убирает
                 // .raw на любом пути выхода.
                 SnapshotCopy copy{meta_.path(), snap_raw_path, snap_path, config_.snapshot_hook};
                 {
@@ -736,7 +736,7 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
                     const auto t = SteadyClock::now();
                     meta_.with_lock([&] {
                         meta_.cut_snapshot(copy.reader(), &m.take);
-                        up.take_ns = wall_ns();  // SPEC 6.4: committed_take_ns
+                        up.take_ns = wall_ns();  // для committed_take_ns
                         // С этого момента сессия пересоздана без патча: сбой снимка означает
                         // force_snapshot.
                         snapshot_taken = true;
@@ -822,11 +822,11 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
         m.msg_id = up.msg_id;
         remove_quietly(blob_path);
         try {
-            // Чужое сообщение шаг 7 не открепляет (SPEC 7.2, --force-local).
+            // Чужое сообщение не открепляем (--force-local).
             store_.set_head(up.msg_id, expect.foreign ? std::nullopt : expect.msg_id);
             last_pin_ = clock_.now();
         } catch (const store::StoreError& e) {
-            // Окончательная ошибка: pin не прошёл, ждать кэш TDLib незачем (SPEC 7.1). Иначе pin
+            // Окончательная ошибка: pin не прошёл, ждать кэш TDLib незачем. Иначе pin
             // мог состояться, а кэш TDLib мог его не показать.
             up.pin_may_have_passed = e.kind() != store::StoreErrorKind::permanent;
             if (up.pin_may_have_passed) {
@@ -842,7 +842,7 @@ CommitResult CommitManager::commit_attempt(bool force_snapshot, bool& restart_as
         throw;
     } catch (const std::exception& e) {
         if (snapshot_taken) {
-            mark_force_snapshot();  // SPEC 7.1: изменения до VACUUM INTO ушли из сессии
+            mark_force_snapshot();  // изменения до VACUUM INTO ушли из сессии
         }
         remove_quietly(blob_path);
         if (!unconfirmed_) {
@@ -947,7 +947,7 @@ void CommitManager::finish_commit(const Uploaded& up) {
         stats_committed_gen_ = up.generation;
     }
     cv_.notify_all();
-    // Строка index_history уйдёт со следующим блобом; dirty не ставит (SPEC 6.6).
+    // Строка index_history уйдёт со следующим блобом; dirty не ставит.
     meta_.write(
         [&](Db& db) {
             Stmt st{db, "SELECT 1 FROM index_history WHERE generation = ?"};
@@ -961,7 +961,7 @@ void CommitManager::finish_commit(const Uploaded& up) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Отложенная уборка (SPEC 7.4)
+// Отложенная уборка
 
 void CommitManager::gc(uint64_t generation, CommitMetrics& metrics) {
     metrics.gc_chunks_deleted = gc_chunks(generation);
@@ -984,8 +984,8 @@ CommitManager::GcResult CommitManager::collect_garbage() {
 // Порядок для чанка: (1) запись в upload_journal (chunk_id, msg_id) — долговечное намерение;
 // (2) удаление строки chunks (housekeeping); (3) deleteMessages; (4) удаление записи журнала.
 // Сначала строка, потом сообщение: при сбое между ними индекс не ссылается на удалённое
-// сообщение (иначе дедупликация M4 могла бы воскресить чанк без данных). Сообщение, оставшееся
-// после сбоя, удалит уборка сирот при монтировании по записи журнала (SPEC 7.2, шаг 7), а
+// сообщение (иначе дедупликация могла бы воскресить чанк без данных). Сообщение, оставшееся
+// после сбоя, удалит уборка сирот при монтировании по записи журнала, а
 // после ошибки Store — следующий проход уборки (gc_retry_).
 size_t CommitManager::gc_chunks(uint64_t generation) {
     if (!gc_retry_.empty()) {

@@ -1,6 +1,6 @@
-// Снимок в коммите без долгой блокировки записи (SPEC 6.6, 7.1 шаги 2 и 8): блокировка
+// Снимок в коммите без долгой блокировки записи: блокировка
 // MetaStore не держится на время копирования, граница pending_patchsets по max_pending_seq,
-// сбои на каждом шаге снимка, узнавание своего снимка при монтировании (SPEC 7.2).
+// сбои на каждом шаге снимка, узнавание своего снимка при монтировании.
 // Синхронизация идёт через хук этапов копирования (CommitConfig::snapshot_hook).
 
 #include <gtest/gtest.h>
@@ -233,7 +233,7 @@ TEST_F(SnapshotCommit, UploadFailureAfterCopyForcesSnapshotAndRemovesFiles) {
     EXPECT_EQ(remote_state(), normalized(test::dump_of(*fs)));
 }
 
-// --- узнавание своего снимка при монтировании (SPEC 7.2) ---
+// --- узнавание своего снимка при монтировании ---
 
 // Процесс упал после pin снимка (между шагами 6 и 8), записи после среза сделаны уже во время
 // копирования. Блоб головы — состояние на срез; монтирование узнаёт его по tmp/index-<G>.sqlite
@@ -302,7 +302,7 @@ TEST_F(SnapshotCommit, RawCopyLeftByCrashIsCleanedAtMount) {
     EXPECT_EQ(remote_state(), normalized(test::dump_of(*fs)));
 }
 
-// force_snapshot, поставленный после среза снимка, снимок не сбрасывает (SPEC 6.6): промежуточный
+// force_snapshot, поставленный после среза снимка, снимок не сбрасывает: промежуточный
 // забор во время копии забрал патч с записями после среза, не смог положить его в
 // pending_patchsets, и без снимка следующая дельта эти записи потеряла бы.
 TEST_F(SnapshotCommit, ForceSnapshotMarkedAfterTheCutSurvivesTheSnapshotCommit) {

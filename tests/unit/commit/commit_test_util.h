@@ -56,7 +56,7 @@ class FakeClock final : public Clock {
     time_point now_{std::chrono::hours(1)};
 };
 
-// Store, который прячет голову, как TDLib с кэшем ChannelFull (SPEC 2): несколько ответов
+// Store, который прячет голову, как TDLib с кэшем ChannelFull: несколько ответов
 // read_head подряд возвращают `shown` (nullopt — «нет головы») вместо настоящей головы. Всё
 // остальное пробрасывает. Может ещё закрепить и ответить ошибкой («потерянный ответ» pin).
 class MaskedHeadStore final : public store::Store {
@@ -130,7 +130,7 @@ class MaskedHeadStore final : public store::Store {
 };
 
 // Дамп без служебных строк: index_history и мёртвые чанки (dead_since_gen не NULL) пишутся
-// уборкой и шагом 8 после коммита и в блоб этого поколения не попадают (SPEC 6.6, 7.4).
+// уборкой и шагом 8 после коммита и в блоб этого поколения не попадают.
 inline std::string normalized(const std::string& dump) {
     std::istringstream in(dump);
     std::string out;
@@ -163,7 +163,7 @@ class CommitEnv : public ::testing::Test {
         // Снимок пустого индекса — сотни байт, и уже одна дельта превысила бы 0,25 от него.
         // Тесты, которым нужны снимки по размеру, выставляют долю сами.
         commit_config_.checkpoint_ratio = 1e9;
-        // Окно кэша TDLib (SPEC 7.1) в тестах на настоящих часах не ждём: тесты окна идут на
+        // Окно кэша TDLib в тестах на настоящих часах не ждём: тесты окна идут на
         // подменённых часах (commit_timing_test.cpp) и выставляют его сами.
         commit_config_.cas_retry_window = std::chrono::milliseconds{0};
         keyfile_ = tmp_ / "keyfile";

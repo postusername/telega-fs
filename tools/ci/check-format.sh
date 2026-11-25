@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Проверка форматирования всех C/C++ файлов из git (SPEC 15.5).
+# Проверка форматирования всех C/C++ файлов из git.
 set -euo pipefail
 
 CLANG_FORMAT=${CLANG_FORMAT:-clang-format-18}

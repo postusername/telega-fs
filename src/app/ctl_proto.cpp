@@ -36,7 +36,7 @@ std::string dispatch(std::string_view line, const Handlers& handlers) {
     if (proto == req.end()) {
         return make_error(code::bad_request, "the request has no \"proto\" field");
     }
-    // Версия не целое или не 1 — «неизвестная версия» (SPEC 12.4).
+    // Версия не целое или не 1 — «неизвестная версия».
     if (!proto->is_number_integer() || proto->get<int64_t>() != kProtoVersion) {
         return make_error(code::unsupported, "unsupported protocol version, this server speaks " +
                                                  std::to_string(kProtoVersion));

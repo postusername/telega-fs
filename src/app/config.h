@@ -1,6 +1,6 @@
 #pragma once
 
-// config.toml, профили и пути на диске (SPEC 12.1, 12.2).
+// config.toml, профили и пути на диске.
 
 #include <chrono>
 #include <cstdint>
@@ -36,7 +36,7 @@ struct Profile {
 
     uint64_t cache_limit = uint64_t{4} << 30U;
     uint64_t staging_limit = uint64_t{8} << 30U;
-    // Порог, выше которого запечатывание идёт сразу, без seal_delay (SPEC 8.3, 12.2); пусто —
+    // Порог, выше которого запечатывание идёт сразу, без seal_delay; пусто —
     // 75 % от staging_limit.
     std::optional<uint64_t> staging_high_watermark;
     std::chrono::milliseconds commit_interval{60'000};
@@ -45,7 +45,7 @@ struct Profile {
     uint64_t patch_take_rows = 2000;
     double checkpoint_ratio = 0.25;
     uint32_t retain_generations = 8;
-    uint32_t send_rate = 12;  // действий в минуту (SPEC 10.2, E5)
+    uint32_t send_rate = 12;  // действий в минуту (E5)
     uint64_t send_bytes_rate = uint64_t{224} << 20U;  // байт загружаемых документов в минуту
     uint64_t album_max_doc_size = uint64_t{8} << 20U;  // не больше — альбомами по 10 (E6)
     std::chrono::milliseconds read_pause{10'000};  // пауза между пачками getMessages (E3)
@@ -56,9 +56,9 @@ struct Profile {
     std::chrono::milliseconds read_timeout{60'000};
     std::chrono::milliseconds sync_timeout{300'000};
     uint64_t plain_cache = uint64_t{64} << 20U;
-    uint64_t readahead = uint64_t{4} << 20U;  // окно readahead, 0 — выключен (SPEC 8.2)
+    uint64_t readahead = uint64_t{4} << 20U;  // окно readahead, 0 — выключен
     uint64_t readahead_max = uint64_t{32} << 20U;  // окно удваивается до этого значения
-    double compact_ratio = 0.25;  // уплотнять пакеты с live_bytes / plain_size ниже (SPEC 6.5)
+    double compact_ratio = 0.25;  // уплотнять пакеты с live_bytes / plain_size ниже
 
     // Задаются при init и дальше берутся из index.sqlite (meta), а не из конфига.
     uint64_t chunk_size = uint64_t{8} << 20U;  // E7
@@ -88,10 +88,10 @@ std::chrono::milliseconds parse_duration(std::string_view text);
 // Переменные окружения TELEGA_API_ID и TELEGA_API_HASH перекрывают файл.
 Config parse_config(std::string_view toml_text, std::string_view source_name = "config.toml");
 // Прочитать файл. Если файла нет — пустой Config (профилей нет). Файл, доступный группе
-// или остальным, — ConfigError (в нём api_hash, SPEC 12.1).
+// или остальным, — ConfigError (в нём api_hash).
 Config load_config(const std::filesystem::path& path);
 
-// Каталоги XDG (SPEC 12.1): XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME, иначе от $HOME.
+// Каталоги XDG: XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME, иначе от $HOME.
 std::filesystem::path default_config_path();
 
 struct ProfilePaths {
@@ -116,8 +116,8 @@ ProfilePaths profile_paths(std::string_view profile);
 // data_dir приводятся к 0700.
 void ensure_profile_dirs(const ProfilePaths& paths);
 
-// flock(LOCK_EX | LOCK_NB) на файл lock на всё время монтирования или обслуживающей команды
-// (SPEC 12.1). Занят — ConfigError «профиль уже используется».
+// flock(LOCK_EX | LOCK_NB) на файл lock на всё время монтирования или обслуживающей команды. Занят
+// — ConfigError «профиль уже используется».
 class ProfileLock {
   public:
     explicit ProfileLock(const std::filesystem::path& lock_file);

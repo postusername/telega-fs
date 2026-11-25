@@ -1,4 +1,4 @@
-// e3: чтение старых сообщений по id в режиме бота (SPEC 17.6). Канал создаёт пользователь,
+// e3: чтение старых сообщений по id в режиме бота. Канал создаёт пользователь,
 // до добавления бота отправляет в него короткие тексты; потом бот (отдельный каталог сессии
 // <state-dir>/bot-e3) долго, не быстрее лимитов, доводит канал до 10 000 id, а затем перебирает
 // все id через getMessages и сверяет ответы со списком отправленного и удалённого (ledger).
@@ -47,9 +47,9 @@ using std::chrono::milliseconds;
 using std::chrono::seconds;
 
 constexpr int64_t kServerIdShift = 20;
-constexpr int kUserMessageBudget = 50;  // SPEC 17.2: с аккаунта пользователя за все эксперименты
+constexpr int kUserMessageBudget = 50;  // с аккаунта пользователя за все эксперименты
 constexpr uint64_t kSeed = 0xE3E3E3E3ULL;
-constexpr int64_t kMaxFloodWaitSeconds = 3600;  // SPEC 17.2: больше часа — остановиться
+constexpr int64_t kMaxFloodWaitSeconds = 3600;  // больше часа — остановиться
 
 std::atomic<bool> g_stop{false};
 
@@ -119,12 +119,12 @@ struct E3Options {
     std::string rights = "only:post,edit,delete";
     int user_messages = 25;  // до добавления бота
     int user_deletes = 5;  // сколько сообщений пользователя бот пробует удалить
-    int user_interval_ms = 13000;  // не больше 5 в минуту (SPEC 17.2)
+    int user_interval_ms = 13000;  // не больше 5 в минуту
     int target = 10000;  // заполнять, пока максимальный серверный id не дойдёт сюда
     int commit_every = 60;  // каждые столько сообщений бота: «коммит» (индекс, pin, unpin)
     int delete_every = 100;  // каждые столько сообщений бота: пачка удалений
     int delete_batch = 10;
-    int send_interval_ms = 3400;  // 17,6 действия в минуту (потолок 18, SPEC 17.2)
+    int send_interval_ms = 3400;  // 17,6 действия в минуту (потолок 18)
     int pin_interval_ms = 4200;  // после pin, unpin и удалений: не больше 15 в минуту
     int pause_ms = 2000;  // перебор: пауза между пачками getMessages
     int margin = 100;  // перебор: сколько id сверх последнего проверить
@@ -1428,7 +1428,7 @@ void cmd_teardown(BenchEnv& env, const BenchOptions& options, const E3Options& e
 }  // namespace
 
 void add_e3_command(CLI::App& app, const BenchOptions& options, int* exit_code) {
-    auto* cmd = app.add_subcommand("e3", "Experiment E3: reading old messages by id (SPEC 17.6)");
+    auto* cmd = app.add_subcommand("e3", "Experiment E3: reading old messages by id");
     cmd->require_subcommand(1);
     auto e3 = std::make_shared<E3Options>();
     e3->out = default_out_dir("03-e3-history-scan");

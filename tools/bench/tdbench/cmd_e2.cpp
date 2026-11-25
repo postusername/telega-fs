@@ -1,4 +1,4 @@
-// e2: закрепление в режиме бота (SPEC 17.5). Канал создаёт и настраивает пользователь (только
+// e2: закрепление в режиме бота. Канал создаёт и настраивает пользователь (только
 // настройка, сообщений с него нет), цикл «отправить документ, pin, getChatPinnedMessage, unpin
 // предыдущего» выполняет бот.
 //
@@ -595,7 +595,7 @@ void cmd_probe(BenchEnv& env, const BenchOptions& options, const E2Options& e2,
         std::this_thread::sleep_for(seconds{5});
         get(*bot, "bot getChatPinnedMessage (5 s later)");
     } else if (what == "delete") {
-        // Может ли бот без права удаления убрать собственное сообщение (нужно для GC, SPEC 7.4).
+        // Может ли бот без права удаления убрать собственное сообщение (нужно для GC).
         auto user = env.open(Account::kUser, std::cerr);
         auto bot = env.open(Account::kBot, std::cerr);
         std::string err;
@@ -1034,7 +1034,7 @@ void cmd_teardown(BenchEnv& env, const BenchOptions& options, const E2Options& e
 }  // namespace
 
 void add_e2_command(CLI::App& app, const BenchOptions& options, int* exit_code) {
-    auto* cmd = app.add_subcommand("e2", "Experiment E2: pinning in bot mode (SPEC 17.5)");
+    auto* cmd = app.add_subcommand("e2", "Experiment E2: pinning in bot mode");
     cmd->require_subcommand(1);
     auto e2 = std::make_shared<E2Options>();
     e2->out = default_out_dir("02-e2-bot-pinning");

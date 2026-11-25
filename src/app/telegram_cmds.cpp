@@ -43,7 +43,7 @@ crypto::KeyringFile read_keyring(const fs::path& path) {
     }
 }
 
-// Создать keyring без ФС (SPEC 11, «Keyring до init»). Возвращает tdlib_db_key.
+// Создать keyring без ФС. Возвращает tdlib_db_key.
 crypto::Key create_bare_keyring(const Loaded& l) {
     crypto::KdfParams kdf;
     crypto::Key kek;
@@ -195,8 +195,8 @@ void TelegramBackend::connect() {
 store::TelegramStoreOptions mount_store_options(const Loaded& loaded, int64_t chat_id,
                                                 bool read_only) {
     store::TelegramStoreOptions options = store_options(loaded.profile, chat_id);
-    // Кэш чтения (SPEC 8.2): файлы TDLib в tdfiles/, учёт в state.sqlite профиля. В --ro
-    // state.sqlite не меняется (SPEC 7.2): без state_db учёт ведётся только в памяти, таблица
+    // Кэш чтения: файлы TDLib в tdfiles/, учёт в state.sqlite профиля. В --ro
+    // state.sqlite не меняется: без state_db учёт ведётся только в памяти, таблица
     // read_cache не создаётся и не пишется.
     if (!read_only) {
         options.state_db = loaded.paths.state_db();
@@ -240,7 +240,7 @@ int login_impl(const LoginArgs& args) {
     const ApiCredentials api = api_credentials(l.config);
     crypto::init();
 
-    // Режим: --bot и --qr сильнее профиля; без них — auth из профиля (SPEC 10.3).
+    // Режим: --bot и --qr сильнее профиля; без них — auth из профиля.
     const bool bot = args.bot || (!args.qr && l.profile.auth == AuthMode::bot);
     const bool test_dc = args.test_dc || l.profile.use_test_dc;
 
@@ -378,7 +378,7 @@ bool is_bot(const td::Json& me) {
            me["type"].value("@type", std::string{}) == "userTypeBot";
 }
 
-// createNewSupergroupChat(is_channel = true): канал создаёт пользователь (SPEC 10.3).
+// createNewSupergroupChat(is_channel = true): канал создаёт пользователь.
 int64_t create_channel(TgSession& session, const std::string& title) {
     const td::Json chat = session.client().call(td::Json{{"@type", "createNewSupergroupChat"},
                                                          {"title", title},
@@ -406,7 +406,7 @@ int init_telegram(const Loaded& l, const InitArgs& args, const meta::InitOptions
     if (args.title && args.title->empty()) {
         throw CommandError("the channel title must not be empty");
     }
-    // Поля init: keyring уже создан login, ключи берутся из него (SPEC 11).
+    // Поля init: keyring уже создан login, ключи берутся из него.
     const crypto::KeyringFile keyring = load_keyring_for(l, args.global);
     // Профиль занимается до любой проверки его состояния: иначе параллельный init или mount
     // менял бы базы между проверкой и самим init.
@@ -418,7 +418,7 @@ int init_telegram(const Loaded& l, const InitArgs& args, const meta::InitOptions
         throw CommandError(std::string(e.what()) + "; init refuses to overwrite it");
     }
     // Keyring с ФС: если она уже закоммичена, init отказывает; если нет (прерванный init), он
-    // повторяется (SPEC 12.3).
+    // повторяется.
     fs::path keyfile = l.profile.keyfile;
     if (args.keyfile) {
         keyfile = absolute_path(*args.keyfile);
@@ -450,7 +450,7 @@ int init_telegram(const Loaded& l, const InitArgs& args, const meta::InitOptions
 
     meta::InitOptions opts = base_opts;
     opts.key = source;
-    // Кэш TDLib может до полутора минут скрывать свой pin (SPEC 2, 12.3).
+    // Кэш TDLib может до полутора минут скрывать свой pin.
     opts.stale_head_window = meta::CommitConfig{}.cas_retry_window;
     opts.stale_head_period = meta::CommitConfig{}.cas_retry_period;
     // Копии пароля затираются на любом выходе (Secret затирает свою сам).
@@ -462,7 +462,7 @@ int init_telegram(const Loaded& l, const InitArgs& args, const meta::InitOptions
     const KeyWipe wipe_opts{opts.key};
     meta::InitResult result;
     try {
-        // Проверки канала (SPEC 12.3): доступен, автоудаление выключено, права — в open();
+        // Проверки канала: доступен, автоудаление выключено, права — в open();
         // «закреплённых нет» проверяет init_fs.
         backend.open_store(chat_id);
         result = meta::init_fs(backend.store(), meta::FsPaths{l.paths.data_dir}, opts);

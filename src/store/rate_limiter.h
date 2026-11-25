@@ -1,6 +1,6 @@
 #pragma once
 
-// Лимитер действий в канале (SPEC 10.2): два token bucket и общая пауза после FLOOD_WAIT.
+// Лимитер действий в канале: два token bucket и общая пауза после FLOOD_WAIT.
 //
 // Действие — отправка документа, pin, unpin, удаление пачки сообщений; альбом стоит
 // kAlbumActions действий. Байты считаются по размеру загружаемых документов (у альбома — сумма).
@@ -47,12 +47,12 @@ class RateLimiter {
     RateLimiter& operator=(const RateLimiter&) = delete;
 
     // Дождаться, пока в обоих бакетах хватит токенов и не идёт пауза FLOOD_WAIT, и списать их.
-    // deadline = nullopt — ждать бесконечно (фоновые загрузки, SPEC 10.2).
+    // deadline = nullopt — ждать бесконечно (фоновые загрузки).
     // false — истёк deadline или вызван stop(); токены при этом не списываются.
     [[nodiscard]] bool acquire(double actions, uint64_t bytes,
                                std::optional<Clock::time_point> deadline = std::nullopt);
 
-    // Сервер ответил FLOOD_WAIT (любой код с retry_after, SPEC 10.2): все acquire ждут
+    // Сервер ответил FLOOD_WAIT (любой код с retry_after): все acquire ждут
     // retry_after плюс случайный джиттер. Пауза не сокращается более коротким retry_after.
     void on_flood_wait(std::chrono::seconds retry_after);
 

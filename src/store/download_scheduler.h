@@ -1,10 +1,10 @@
 #pragma once
 
-// Планировщик скачиваний TelegramStore (SPEC 8.2 «Планировщик скачиваний», 10.2 «Лимиты и
-// ошибки»). Все скачивания одного файла TDLib (чанка, пакета, блоба индекса) идут через его
-// очередь, потому что новый downloadFile того же файла с другими offset/limit отменяет прежний.
+// Планировщик скачиваний TelegramStore. Все скачивания одного файла TDLib (чанка, пакета, блоба
+// индекса) идут через его очередь, потому что новый downloadFile того же файла с другими
+// offset/limit отменяет прежний.
 //
-// Правила (E10 подтвердил поведение TDLib, SPEC 17.13):
+// Правила (E10 подтвердил поведение TDLib):
 // - по файлу активно не больше одного скачивания (offset, limit, priority), downloadFile всегда с
 //   synchronous = false. Ход приходит в updateFile: готов префикс
 //   [download_offset, download_offset + downloaded_prefix_size);
@@ -24,17 +24,17 @@
 // TDLib (getFileDownloadedPrefixSize, getFile) делают потоки вызывающих. Ни один вызов TDLib не
 // делается под мьютексом.
 //
-// Решения, которых нет в тексте спеки дословно:
+// Неочевидные решения:
 // - ранг пользовательского запроса считается по файлам: у файла один ранг — по его самому
 //   старому ждущему запросу; следующие запросы того же файла ждут в его очереди, пока старый
 //   не обслужен;
 // - окно, которое больше никого не обслуживает (пользователь дочитал, а readahead его
 //   «заимствовал»), через demote_delay понижается до приоритета readahead повторным вызовом;
 // - оборвавшееся скачивание (updateFile «не качается» при непокрытом окне) отдаётся ждущим как
-//   DownloadCanceled (transient), его повторяет вызывающий с новым file_id (SPEC 10.2);
+//   DownloadCanceled (transient), его повторяет вызывающий с новым file_id;
 //   скачивание без прогресса stall_timeout повторяется тем же вызовом до max_stalls раз;
 // - ответ на пользовательский запрос в очереди дольше read_timeout — transient (отсчёт от
-//   постановки запроса, SPEC 8.2 «Без сети»); ожидание вытеснения, getFileDownloadedPrefixSize и
+//   постановки запроса, без сети); ожидание вытеснения, getFileDownloadedPrefixSize и
 //   getFile ограничены тем же дедлайном;
 // - вытеснение (begin_evict/end_evict) помечает все file_id с вытесняемым путём и запоминает сам
 //   путь, поэтому чтение файла, которого планировщик не знал, тоже ждёт конца вытеснения, как
@@ -70,7 +70,7 @@ class DownloadCanceled : public StoreError {
     using StoreError::StoreError;
 };
 
-// TDLib считает файл скачанным, а локального файла нет (SPEC 10.2). Повторяется downloadFile.
+// TDLib считает файл скачанным, а локального файла нет. Повторяется downloadFile.
 class LocalFileGone : public StoreError {
   public:
     using StoreError::StoreError;
@@ -110,7 +110,7 @@ struct SchedulerHooks {
     // Общая пауза после FLOOD_WAIT: новые downloadFile не уходят, пока она не кончится.
     std::function<Clock::time_point()> pause_until;
     std::function<void(const td::TdError&)> on_flood;
-    // Файл кэша чтения скачивался или читался (SPEC 8.2): учёт ведёт TelegramStore. Вызывается без
+    // Файл кэша чтения скачивался или читался: учёт ведёт TelegramStore. Вызывается без
     // мьютексов планировщика.
     std::function<void(const std::string& path, const std::string& remote_id)> on_touch;
     // Путь файла перестал существовать (переименование при завершении скачивания, удаление).
@@ -159,7 +159,7 @@ class DownloadScheduler {
     // чанках от позиции чтения. Ошибки глотаются.
     void prefetch(const FileRef& file, uint64_t offset, uint64_t len, uint32_t distance);
 
-    // Вытеснение из кэша чтения (SPEC 8.2). begin_evict сообщает, что файл по этому пути можно
+    // Вытеснение из кэша чтения. begin_evict сообщает, что файл по этому пути можно
     // удалять: false — он занят (скачивается, читается или ждёт чтения; под одним путём могут быть
     // известны несколько file_id, занят любой — отказ). Пока вытеснение не закончено (end_evict),
     // чтение любого file_id, чей путь совпал с вытесняемым, ждёт: помечаются все известные
@@ -202,7 +202,7 @@ class DownloadScheduler {
         int64_t size = 0;
         bool active = false;
         bool completed = false;
-        std::string path_name;  // только имя файла: пути в логи не пишутся (SPEC 11)
+        std::string path_name;  // только имя файла: пути в логи не пишутся
     };
     static constexpr size_t kUpdateHistory = 16;
     struct FileState {

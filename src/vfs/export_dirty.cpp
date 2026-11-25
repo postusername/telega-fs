@@ -33,7 +33,7 @@ namespace {
 constexpr int64_t kMaxExportSize = int64_t{1} << 50;
 // Выгрузка идёт кусками, память не зависит от chunk_size.
 constexpr uint64_t kPiece = uint64_t{4} << 20U;
-// Запас на скачки часов при сравнении времени inode с committed_take_ns (SPEC 12.3).
+// Запас на скачки часов при сравнении времени inode с committed_take_ns.
 constexpr int64_t kClockSlackNs = int64_t{5} * 60 * 1'000'000'000;
 
 std::string printable(const std::string& name) {
@@ -257,7 +257,7 @@ ExportReport export_dirty(const meta::FsPaths& paths, store::Store* store,
     const auto chunk_size = static_cast<uint64_t>(params.chunk_size);
     ExportReport report;
 
-    // Залитое, но не закоммиченное: overlay у него уже очищен (SPEC 8.1, шаг 5), а в канале его
+    // Залитое, но не закоммиченное: overlay у него уже очищен, а в канале его
     // нет. По committed_take_ns находятся inode, изменённые после последнего забора патча.
     std::set<int64_t> changed_dirs;
     if (const auto take = state.get_int(meta::state_key::committed_take_ns)) {
@@ -274,7 +274,7 @@ ExportReport export_dirty(const meta::FsPaths& paths, store::Store* store,
             }
         }
     } else {
-        // Состояние до M4: времени последнего коммита нет. Инлайн-данные живут только в индексе
+        // Старое состояние: времени последнего коммита нет. Инлайн-данные живут только в индексе
         // и могли быть запечатаны после коммита, поэтому выгружаются все.
         report.warnings.emplace_back(
             "committed_take_ns is missing: only the overlay and all inline files are exported");
@@ -357,7 +357,7 @@ ExportReport export_dirty(const meta::FsPaths& paths, store::Store* store,
                     }
                 };
 
-                // 1. Позиция в overlay: staging-файл, дальше его длины нули (SPEC 8.2).
+                // 1. Позиция в overlay: staging-файл, дальше его длины нули.
                 if (const auto it = dirty.find(static_cast<int64_t>(idx)); it != dirty.end()) {
                     const fs::path sp = staging_file(paths, *it->second);
                     std::error_code ec;
@@ -372,7 +372,7 @@ ExportReport export_dirty(const meta::FsPaths& paths, store::Store* store,
                         ++file.overlay_positions;
                         continue;
                     }
-                    // Строка пережила свой файл (SPEC 8.1): при старте Vfs позиция снова читается
+                    // Строка пережила свой файл: при старте Vfs позиция снова читается
                     // из индекса, откат не глубже последнего коммита.
                     report.warnings.push_back(file.path + ": staging file of position " +
                                               std::to_string(idx) +

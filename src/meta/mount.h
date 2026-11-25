@@ -1,12 +1,17 @@
 #pragma once
 
-// Монтирование и размонтирование (SPEC 7.2 шаги 1, 4–9; шаги 2–3 про TDLib — M2).
+// Монтирование и размонтирование.
+//
+// Шаги монтирования (по этим номерам на них ссылаются комментарии): 1 ключи, 4 чтение головы, 5
+// признак нечистого завершения, 6 сверка поколений, 7 сироты upload_journal, 8 висячие inode, 9
+// clean_shutdown = 0. Шаги 2–3 (поднять TDLib, проверить доступ к каналу) делает вызывающий.
 //
 // mount_fs разблокирует ключи, читает и проверяет голову канала, сводит локальное состояние
-// с удалённым по таблице 7.2, убирает сирот и открытые удалённые inode и отдаёт MountedFs —
-// владельца MetaStore, StateStore, CommitManager и ключей. Его берут Vfs и FUSE.
+// с удалённым по поколениям G_r и G_l (ситуации — MountSituation), убирает сирот и открытые
+// удалённые inode и отдаёт MountedFs — владельца MetaStore, StateStore, CommitManager и ключей. Его
+// берут Vfs и FUSE.
 //
-// Решения, которых нет в спеке (подробнее в mount.cpp):
+// Нетривиальные решения (подробнее в mount.cpp):
 // - «сбой между pin и шагом 8» (G_r = G_l + 1, голова — наш блоб): узнаётся по содержимому
 //   (дельта — тот же список цепочки и та же склейка pending_patchsets; снимок — тот же файл
 //   tmp/index-<G>.sqlite), и шаг 8 доделывается при монтировании;
@@ -33,7 +38,7 @@
 
 namespace telega::meta {
 
-// Файлы data-каталога профиля (SPEC 12.1). app::ProfilePaths переводится в эту структуру.
+// Файлы data-каталога профиля. app::ProfilePaths переводится в эту структуру.
 struct FsPaths {
     std::filesystem::path data_dir;
 
@@ -47,7 +52,7 @@ struct FsPaths {
 // Создать data_dir (0700), staging/ и tmp/.
 void ensure_fs_dirs(const FsPaths& paths);
 
-// Откуда KEK (SPEC 11): keyfile, если путь задан, иначе пароль.
+// Откуда KEK: keyfile, если путь задан, иначе пароль.
 struct KeySource {
     std::optional<std::string> passphrase;
     std::filesystem::path keyfile;
@@ -87,10 +92,10 @@ struct MountOptions {
     bool discard_local = false;  // --discard-local: G_r > G_l с локальными изменениями
     bool force_local = false;  // --force-local: G_r < G_l или потеря головы, коммит — снимок
     // Служебная команда без FUSE (fsck --repair): после выбора индекса не делаются сироты
-    // upload_journal, удаление висячих inode, чистка tmp/ и clean_shutdown = 0 (SPEC 7.2,
-    // шаги 7–9): fsck ничего не удаляет в канале (SPEC 12.3).
+    // upload_journal, удаление висячих inode, чистка tmp/ и clean_shutdown = 0: fsck
+    // ничего не удаляет в канале.
     bool maintenance = false;
-    // Кэш TDLib (SPEC 2): сразу после init или размонтирования голова канала может до минуты
+    // Кэш TDLib: сразу после init или размонтирования голова канала может до минуты
     // читаться старой или пустой. Если у профиля есть локальный индекс с головой H, а канал
     // отдал «нет головы» или голову старше H, чтение повторяется раз в `stale_head_period`, но
     // не дольше `stale_head_window` (0 — не повторять, для хранилищ без кэша).
@@ -100,7 +105,7 @@ struct MountOptions {
     bool start_background = true;  // фоновый поток CommitManager
 };
 
-// Какая строка таблицы 7.2 сработала.
+// Какая ситуация сверки локального состояния с головой сработала.
 enum class MountSituation : uint8_t {
     built_fresh,  // локального индекса не было: собран из цепочки
     same_generation,  // G_r == G_l
@@ -144,7 +149,7 @@ class MountedFs {
     [[nodiscard]] const MountReport& report() const { return report_; }
     [[nodiscard]] bool read_only() const { return committer_->read_only(); }
 
-    // Размонтирование (SPEC 7.2, последний абзац): финальный коммит (его ошибка только
+    // Размонтирование: финальный коммит (его ошибка только
     // пишется в лог), остановка CommitManager, clean_shutdown = 1. Загрузки до этого
     // дожидается Vfs. При --ro только остановка. Повторный вызов ничего не делает.
     void unmount();

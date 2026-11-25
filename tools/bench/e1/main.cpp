@@ -1,4 +1,4 @@
-// tgfs-e1: эксперимент E1 «Размеры патчей дельта-журнала» (SPEC 17.4).
+// tgfs-e1: эксперимент E1 «Размеры патчей дельта-журнала».
 // Запуск и методика — docs/experiments/01-e1-patch-sizes.md.
 
 #include <CLI/CLI.hpp>
@@ -18,7 +18,7 @@ int main(int argc, char** argv) {
     std::string work;
     std::string out;
     std::string sizes;
-    CLI::App app{"tgfs-e1: patch sizes of the delta journal (SPEC 17.4)"};
+    CLI::App app{"tgfs-e1: patch sizes of the delta journal"};
     app.require_subcommand(1);
     app.add_option("--work", work, "scratch directory for temporary data")->required();
     app.add_option("--out", out, "directory for CSV files")->required();
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
     if (o.repeats < 3) {
-        std::cerr << "repeats must be >= 3 (SPEC 17.2)\n";
+        std::cerr << "repeats must be >= 3\n";
         return 2;
     }
     o.work = work;

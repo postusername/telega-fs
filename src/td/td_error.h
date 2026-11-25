@@ -1,6 +1,6 @@
 #pragma once
 
-// Ошибки TDLib (SPEC 10.1, 10.2): ответ `error` превращается в TdError, из текста ошибок лимита
+// Ошибки TDLib: ответ `error` превращается в TdError, из текста ошибок лимита
 // извлекается retry_after.
 
 #include <nlohmann/json.hpp>

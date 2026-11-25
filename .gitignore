@@ -33,6 +33,9 @@ vgcore.*
 # Mount points used during development
 /mnt*/
 
+# Bot credentials for experiments and E2E
+cred.secret
+
 # Editors and OS
 .vscode/
 .idea/
@@ -40,8 +43,11 @@ vgcore.*
 *~
 .DS_Store
 
-# Local agent settings
+# Local agent settings and notes
 .claude/settings.local.json
+.claude/worktrees/
+CLAUDE.local.md
+AGENTS.local.md
 
 # Local retrospectives, not committed
 /docs/retro/

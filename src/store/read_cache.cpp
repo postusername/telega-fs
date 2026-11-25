@@ -15,7 +15,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// Тот же текст, что у StateStore (SPEC 6.4): таблицу может создать любой из двоих.
+// Тот же текст, что у StateStore: таблицу может создать любой из двоих.
 constexpr const char* kSchema = R"sql(
 CREATE TABLE IF NOT EXISTS read_cache (
   path TEXT PRIMARY KEY,

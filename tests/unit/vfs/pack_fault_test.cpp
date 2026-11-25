@@ -1,7 +1,7 @@
-// Инъекция сбоев в заливке и применении пакета (SPEC 6.5, 7.3, 14): настоящее монтирование
+// Инъекция сбоев в заливке и применении пакета: настоящее монтирование
 // (MountedFs с CommitManager) на LocalDirStore, Vfs поверх него. Падение на каждом шаге
 // заливки и применения пакета, затем «перезапуск процесса»: монтирование на том же каталоге
-// (сироты upload_journal, SPEC 7.2 шаг 7), дозаливка overlay и чтение на пустом каталоге.
+// (сироты upload_journal), дозаливка overlay и чтение на пустом каталоге.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -170,7 +170,7 @@ TEST_P(PackCrashAtStep, RestartIsConsistentAndNothingIsLost) {
         Vfs& v = *m.vfs;
         EXPECT_TRUE(m.fs->report().unclean_shutdown);
         EXPECT_EQ(read_all(v, old_ino), old_data);
-        // Незафиксированное, но принятое write, лежит в overlay (SPEC 7.3).
+        // Незафиксированное, но принятое write, лежит в overlay.
         for (size_t i = 0; i < inos.size(); ++i) {
             EXPECT_EQ(read_all(v, inos[i]), data[i]) << i;
         }
@@ -184,7 +184,7 @@ TEST_P(PackCrashAtStep, RestartIsConsistentAndNothingIsLost) {
             EXPECT_EQ(read_all(v, inos[i]), data[i]) << i;
         }
         // Сироты: всё, что осталось без ссылки, — не больше одного сообщения, дошедшего в канал
-        // без записи msg_id в журнале (его убирает только gc --deep, SPEC 7.2 шаг 7).
+        // без записи msg_id в журнале (его убирает только gc --deep).
         EXPECT_LE(unreferenced_messages(*store_, *m.fs), step.message_may_exist ? 1U : 0U)
             << "orphans_deleted=" << m.fs->report().orphans_deleted;
         v.shutdown();
@@ -217,7 +217,7 @@ INSTANTIATE_TEST_SUITE_P(
                       Step{"overlay_cleared", true, FaultAction::transient, false}),
     [](const auto& param_info) { return std::string(param_info.param.name); });
 
-// Успешный fsync файла из пакета: данные и метаданные переживают сбой (SPEC 7.3).
+// Успешный fsync файла из пакета: данные и метаданные переживают сбой.
 TEST_F(PackCrash, DataOfSucceededFsyncSurvivesACrash) {
     init();
     std::vector<Bytes> data;

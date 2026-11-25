@@ -1,21 +1,69 @@
 #!/usr/bin/env bash
-# Расширенный E2E telega-fs на живом Telegram в режиме бота (SPEC 14, веха M3). Запускается вручную.
-# Дополняет tests/e2e/e2e_bot.sh (базовый сценарий M2): здесь холодное чтение с readahead, видео,
-# файл 10 ГиБ при staging_limit 2 ГиБ и кэш чтения с лимитом.
+# Ресурсный E2E telega-fs на живом Telegram в режиме бота: скорость и память на больших данных.
+# Запускается вручную. Дополняет e2e_basic.sh (базовый путь данных): здесь холодное чтение с
+# опережающим чтением, видео, файл 10 ГиБ при staging_limit 2 ГиБ и кэш чтения с лимитом.
 #
-#   tests/e2e/e2e_m3.sh [ЭТАП...]        # без аргументов: все неготовые этапы по порядку
-#   tests/e2e/e2e_m3.sh status           # какие этапы готовы, проверки и результаты
-#   tests/e2e/e2e_m3.sh teardown         # удалить канал (final делает это сам только при всех PASS;
-#                                        при FAIL канал остаётся для разбора)
-#   E2E_REDO="channel a_init a_write b1_read b2_video inspect1 a_huge b3_read final" tests/e2e/e2e_m3.sh
-#                                        # повтор в новом канале; gen (данные в $E2E_WORK/src) не нужен
+# Что проверяет:
+#   - холодное последовательное чтение 200 МиБ с «машины» с пустым кэшем не медленнее порога
+#     (по умолчанию 6 МиБ/с), sha256 и дерево совпадают с эталоном;
+#   - перемотка видео (около 300 МиБ, +faststart) ffmpeg -ss в трёх точках скачивает не больше
+#     3 * (readahead_max + 2 * chunk_size) + заголовок, то есть малую долю файла;
+#   - мелкие файлы лежат в пакетах: документов в канале заметно меньше, чем файлов;
+#   - копирование потока 10 ГиБ при staging_limit 2 ГиБ: пик VmHWM демона меньше 256 МиБ, staging
+#     не выше лимита;
+#   - холодное чтение этого файла целиком при cache_limit 4 ГиБ: sha256 совпадает, каталог кэша
+#     TDLib не выше cache_limit плюс чанк;
+#   - в конце: имена документов <16 hex>.bin|.idx без подписей, секреты не попали в логи.
 #
-# Бинарники: TGFS_BIN, BENCH_BIN (по умолчанию build/w-e2e3). Креды: cred.secret (api-id, api-hash,
-# bot-token) или E2E_CREDS, либо TELEGA_API_ID, TELEGA_API_HASH, TELEGA_BOT_TOKEN. Секреты не
-# печатаются и в логи не попадают (в конце лог-файлы проверяются на токен и api_hash).
+# Что нужно:
+#   - собранные telega-fs и tgfs-bench (-DTELEGA_FS_BUILD_TOOLS=ON); по умолчанию
+#     build/dev/src/telega-fs и build/dev/tools/bench/tdbench/tgfs-bench, иначе TGFS_BIN и BENCH_BIN;
+#   - fusermount3, openssl, sha256sum, awk, find, ffmpeg и ffprobe с libx264;
+#   - место: около 8 ГиБ в E2E_WORK (по умолчанию build/e2e-resources-work): src 0,6 ГиБ, staging
+#     до 2 ГиБ, кэш чтения до 4 ГиБ;
+#   - креды Telegram: файл E2E_CREDS (по умолчанию cred.secret в корне репозитория, строки
+#     api-id=..., api-hash=..., bot-token=...) либо TELEGA_API_ID, TELEGA_API_HASH,
+#     TELEGA_BOT_TOKEN. Секреты не печатаются и в логи не попадают (в конце логи проверяются на
+#     токен и api_hash);
+#   - канал. Два варианта:
+#       E2E_CHAT_ID=-100... (рекомендуется): ваш готовый приватный канал, где бот администратор
+#         с правами публиковать, редактировать и удалять сообщения. Аккаунт пользователя не нужен,
+#         канал не создаётся и не удаляется. Канал должен быть пустым (без закрепа и документов):
+#         иначе этап channel откажется работать, чтобы не затереть чужую ФС (E2E_WIPE_FIRST=1
+#         разрешает боту убрать документы telega-fs и закреп). Если все проверки PASS, этап final
+#         удаляет ботом сообщения telega-fs в канале (E2E_KEEP_CHANNEL=1 оставляет); при FAIL они
+#         остаются для разбора, убрать: tests/e2e/e2e_resources.sh teardown.
+#         Проверка пустоты занимает около 1-2 минут и растёт с числом сообщений
+#         (закреп ждётся до минуты, затем бот отправляет и удаляет текст-зонд, его id задаёт
+#         верхнюю границу, и перебирает id 1..зонд пачками по 100 с паузой 10 с: на канале, где
+#         id дошли до N, это около N/10 с сверх минуты). Бот чистит канал только если
+#         этот E2E_WORK сам проверил его пустым (маркер state/channel-claimed с тем же id); с другим
+#         E2E_CHAT_ID рабочий каталог не берётся. Закреплено что-то кроме головы telega-fs: уборка
+#         отказывает и ничего не удаляет;
+#       без E2E_CHAT_ID: канал создаёт и удаляет аккаунт пользователя в tgfs-bench (`tgfs-bench e2e
+#         setup|teardown`, вход пользователя: `tgfs-bench --qr login`, см. tools/bench).
+#         Это только настройка канала, ни одного сообщения с этого аккаунта.
+#
+# Время и трафик: 1,5-2 часа живого прогона. gen около 5 минут (ffmpeg), a_write около 5 минут,
+# b1_read и b2_video около 10 минут, a_huge около 50 минут (упор в скорость отправки), b3_read
+# 20-30 минут, остальное около 10 минут (паузы кэша TDLib после init и перед inspect). Трафик:
+# около 11 ГиБ исходящего (в основном поток 10 ГиБ) и около 10,5 ГиБ входящего. Чтобы прогнать
+# быстрее и дешевле, уменьшите E2E_HUGE_GIB; проверка staging_limit имеет смысл при значении
+# больше staging_limit.
+#
+# Запуск:
+#   tests/e2e/e2e_resources.sh [ЭТАП...]   # без аргументов: все неготовые этапы по порядку
+#   tests/e2e/e2e_resources.sh status      # какие этапы готовы, проверки и результаты
+#   tests/e2e/e2e_resources.sh teardown    # удалить канал (или, с E2E_CHAT_ID, сообщения в нём);
+#                                          # final делает это сам только при всех PASS
+#   E2E_CHAT_ID=-1001234567890 tests/e2e/e2e_resources.sh
+#   tests/e2e/e2e_resources.sh channel gen a_init a_write    # только эти этапы (заново)
+#   E2E_REDO="channel a_init a_write b1_read b2_video inspect1 a_huge b3_read final" \
+#     tests/e2e/e2e_resources.sh             # повтор в новом канале; gen (данные в $E2E_WORK/src) не нужен
+#   TELEGA_FS_E2E_RUN=1 ctest --test-dir build/dev -L e2e -R e2e_resources   # то же через ctest
 #
 # Этапы (каждый возобновляемый: маркер готовности в $E2E_WORK/state/<этап>.done):
-#   channel   tgfs-bench e2e setup: пользователь создаёт приватный канал и добавляет бота (SPEC 17.2)
+#   channel   канал: проверка пустоты своего (E2E_CHAT_ID) или создание аккаунтом пользователя
 #   gen       данные-эталон: 200 МиБ, мелкие файлы, видео ~300 МиБ (ffmpeg, +faststart), манифест
 #   a_init    машина A: login --bot, init --chat
 #   a_write   A: монтирование, запись всего, fsync, размонтирование
@@ -25,13 +73,14 @@
 #   a_huge    A: копирование 10 ГиБ потоком при staging_limit 2 ГиБ: VmHWM < 256 МиБ, staging <= лимита
 #   b3_read   машина B3 (пустой кэш, cache_limit 4 ГиБ): холодное чтение всего файла, sha256,
 #             tdfiles/ <= cache_limit + чанк
-#   final     inspect, секреты в логах, FLOOD_WAIT, сводка, logout, удаление канала
+#   final     inspect, секреты в логах, FLOOD_WAIT, сводка, logout, удаление канала или уборка в нём
 #
 # Коды выхода:
 #   0  все этапы прошли и все проверки PASS
 #   1  все этапы выполнены, но есть проверки FAIL (список в сводке)
-#   2  неверные аргументы или окружение (нет бинарников, кредов, ffmpeg); ничего не запускалось
-#   3  остановка по правилам SPEC 17.2: FLOOD_WAIT больше часа или бот заблокирован/сессия убита.
+#   2  неверные аргументы или окружение (нет бинарников, кредов, ffmpeg, канал не пуст); ничего не
+#      запускалось
+#   3  остановка по правилу безопасности: FLOOD_WAIT больше часа или бот заблокирован/сессия убита.
 #      Демон убит, канал и данные оставлены, решение за пользователем (файл state/STOP-FLOOD)
 #   4  жёсткая ошибка этапа (не смонтировалось, команда упала); этап не отмечен готовым, прогон
 #      можно повторить той же командой
@@ -40,15 +89,23 @@
 # остальные этапы идут дальше, чтобы длинный прогон дал все данные. Итог в коде 1.
 #
 # Переменные (по умолчанию в скобках):
-#   E2E_WORK (build/e2e-m3-work)   рабочий каталог; для возобновления тот же. Нужно ~8 ГиБ на /data
-#   E2E_CHAT_FILE                  файл с id канала (~/.local/share/telega-fs-bench/e2e-m3-chat)
+#   E2E_CHAT_ID                    id готового канала (см. выше); без него канал создаёт аккаунт
+#                                  пользователя
+#   E2E_WIPE_FIRST=1               с E2E_CHAT_ID: если в канале есть документы или закреп, бот
+#                                  сначала удаляет документы telega-fs и закреп (иначе отказ)
+#   E2E_SCAN_MAX_ID               потолок серверного id зонда при проверке пустоты и уборке
+#                                 (100000); id выше потолка: проверка и уборка не выполняются
+#                                 (ошибка)
+#   E2E_WORK (build/e2e-resources-work)  рабочий каталог; для возобновления тот же
+#   E2E_CHAT_FILE                  файл с id канала (~/.local/share/telega-fs-bench/e2e-resources-chat);
+#                                  при E2E_CHAT_ID это $E2E_WORK/chat-id
 #   E2E_STORE (telegram)           local: профили на LocalDirStore (без сети, для проверки скрипта)
 #   E2E_SIZE_MIB (200), E2E_VIDEO_MIB (300), E2E_HUGE_GIB (10)
 #   E2E_STAGING_LIMIT (2GiB), E2E_CACHE_LIMIT (4GiB)     staging_limit и cache_limit в профилях
 #   E2E_MIN_READ_MIBS (6)          порог холодного последовательного чтения, МиБ/с
 #   E2E_READAHEAD_MAX_MIB (32)     readahead_max профиля (пишется в config.toml машин)
 #   E2E_VIDEO_HEADER_MIB (4)       запас на заголовок видео (moov при +faststart стоит до mdat)
-#                                  и блобы индекса в tdfiles/. Порог скачанного видео (SPEC 14):
+#                                  и блобы индекса в tdfiles/. Порог скачанного видео:
 #                                  3 * (readahead_max + 2 * chunk_size) + заголовок, то есть
 #                                  при значениях по умолчанию 3 * 48 + 4 = 148 МиБ
 #   E2E_TRACE_ARGS                 глобальные опции telega-fs для машин B1..B3 (например -v:
@@ -59,18 +116,22 @@
 #   E2E_CHUNK_MIB (8)              chunk_size профиля (допуск tdfiles/: лимит + чанк)
 #   E2E_SYNC_TIMEOUT (1800s)       sync_timeout профиля
 #   E2E_REDO="этап ..."            сбросить готовность этих этапов (и перезапустить)
-#   E2E_KEEP_CHANNEL=1             не удалять канал в final; E2E_KEEP_SESSIONS=1 не делать logout
-#   E2E_REUSE_CHANNEL=1            канал уже создан, E2E_CHAT_FILE существует (этап channel пропускается)
+#   E2E_KEEP_CHANNEL=1             не удалять канал (или сообщения в нём) в final; E2E_KEEP_SESSIONS=1
+#                                  не делать logout
+#   E2E_REUSE_CHANNEL=1            без E2E_CHAT_ID: канал уже создан, E2E_CHAT_FILE существует
+#                                  (этап channel ничего не создаёт, канал не удаляется)
 #   E2E_BENCH_ARGS                 доп. глобальные опции tgfs-bench (например --state-dir)
 #
-# Время живого прогона: gen ~5 мин (ffmpeg), a_write ~5 мин, b1+b2 ~10 мин, a_huge ~50 мин
-# (упор в send_bytes_rate), b3_read 20-30 мин, остальное ~10 мин (паузы монтирования после init и
-# inspect). Всего 1,5-2 часа. Место: src ~0,6 ГиБ, staging A до 2 ГиБ, tdfiles B3 до 4 ГиБ.
+# Правила безопасности: нагрузку несёт бот. Аккаунт пользователя участвует только в создании и
+# удалении канала и не отправляет сообщений (при E2E_CHAT_ID не участвует вообще). FLOOD_WAIT
+# дольше часа или блокировка бота останавливают прогон (код 3).
 
 set -Eeuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
+# shellcheck disable=SC1091
+. "$here/lib.sh"
 
 # Из ctest без явного разрешения тест пропускается (код 77), чтобы `ctest -LE long` не ходил в сеть.
 if [[ "${E2E_CTEST:-}" == "1" && "${TELEGA_FS_E2E_RUN:-}" != "1" ]]; then
@@ -80,8 +141,8 @@ fi
 
 EXIT_CHECKS=1 EXIT_ENV=2 EXIT_STOP=3 EXIT_STAGE=4
 
-TGFS_BIN="${TGFS_BIN:-$repo/build/w-e2e3/src/telega-fs}"
-BENCH_BIN="${BENCH_BIN:-$repo/build/w-e2e3/tools/bench/tdbench/tgfs-bench}"
+TGFS_BIN="${TGFS_BIN:-$repo/build/dev/src/telega-fs}"
+BENCH_BIN="${BENCH_BIN:-$repo/build/dev/tools/bench/tdbench/tgfs-bench}"
 E2E_CREDS="${E2E_CREDS:-$repo/cred.secret}"
 E2E_STORE="${E2E_STORE:-telegram}"
 E2E_SIZE_MIB="${E2E_SIZE_MIB:-200}"
@@ -97,13 +158,18 @@ E2E_TRACE_CONFIG="${E2E_TRACE_CONFIG:-}"
 E2E_TRACE_ENV="${E2E_TRACE_ENV:-}"
 E2E_CHUNK_MIB="${E2E_CHUNK_MIB:-8}"
 E2E_SYNC_TIMEOUT="${E2E_SYNC_TIMEOUT:-1800s}"
-E2E_CHAT_FILE="${E2E_CHAT_FILE:-${XDG_DATA_HOME:-$HOME/.local/share}/telega-fs-bench/e2e-m3-chat}"
-W="${E2E_WORK:-$repo/build/e2e-m3-work}"
+E2E_CHAT_FILE="${E2E_CHAT_FILE:-${XDG_DATA_HOME:-$HOME/.local/share}/telega-fs-bench/e2e-resources-chat}"
+W="${E2E_WORK:-$repo/build/e2e-resources-work}"
 
 STAGES=(channel gen a_init a_write b1_read b2_video inspect1 a_huge b3_read final)
 [[ "$E2E_STORE" == local || "$E2E_STORE" == telegram ]] || { echo "E2E_STORE: telegram or local" >&2; exit "$EXIT_ENV"; }
-FLOOD_LIMIT_S=3600          # SPEC 17.2: FLOOD_WAIT больше часа останавливает серию
-SEED_PREFIX="tgfs-e2e-m3"   # seed детерминированного генератора данных (пишется в отчёт)
+E2E_CHAT_ID="${E2E_CHAT_ID:-}"
+if [[ -n "$E2E_CHAT_ID" && ! "$E2E_CHAT_ID" =~ ^-100[0-9]+$ ]]; then
+    echo "E2E_CHAT_ID must be the id of a channel: -100 and digits, for example -1001234567890" >&2
+    exit "$EXIT_ENV"
+fi
+FLOOD_LIMIT_S=3600          # FLOOD_WAIT больше часа останавливает серию
+SEED_PREFIX="tgfs-e2e-resources"   # seed детерминированного генератора данных (пишется в отчёт)
 
 now() { date +%s.%N; }
 elapsed() { awk -v a="$1" -v b="$(now)" 'BEGIN { printf "%.1f", b - a }'; }
@@ -130,7 +196,7 @@ HUGE_B=$((E2E_HUGE_GIB * 1073741824))
 
 sub="${1:-}"
 for bin in "$TGFS_BIN" "$BENCH_BIN"; do
-    [[ -x "$bin" ]] || env_die "no executable: $bin"
+    [[ -x "$bin" ]] || env_die "no executable: $bin (build with -DTELEGA_FS_BUILD_TOOLS=ON or set TGFS_BIN and BENCH_BIN)"
 done
 for tool in openssl fusermount3 sha256sum awk find; do
     command -v "$tool" >/dev/null || env_die "need $tool"
@@ -151,7 +217,7 @@ if [[ "$E2E_STORE" == telegram ]]; then
     bot_token="${TELEGA_BOT_TOKEN:-$(cred bot-token)}"
     unset TELEGA_BOT_TOKEN
     [[ -n "$TELEGA_API_ID" && -n "$TELEGA_API_HASH" && -n "$bot_token" ]] ||
-        env_die "need api-id, api-hash and bot-token (E2E_CREDS or environment)"
+        env_die "need api-id, api-hash and bot-token: a file E2E_CREDS (default: cred.secret in the repository root; lines api-id=..., api-hash=..., bot-token=...) or TELEGA_API_ID, TELEGA_API_HASH, TELEGA_BOT_TOKEN"
     export TELEGA_API_ID TELEGA_API_HASH
     unset TELEGA_FS_FAULTS      # инъекция сбоев только для LocalDirStore
 fi
@@ -159,6 +225,7 @@ fi
 mkdir -p "$W/logs" "$W/state" "$W/samples"
 chmod 700 "$W"
 touch "$W/results.env" "$W/checks.txt"
+bench_creds=""   # путь появляется ниже, после установки trap
 # shellcheck disable=SC1091
 . "$W/results.env"
 log "work dir: $W (store: $E2E_STORE)"
@@ -194,7 +261,7 @@ on() {
     XDG_CONFIG_HOME="$W/$m/config" XDG_DATA_HOME="$W/$m/data" XDG_CACHE_HOME="$W/$m/cache" "$@"
 }
 tgfs() { local m=$1; shift; on "$m" "$TGFS_BIN" "$@"; }
-bench() { "$BENCH_BIN" ${E2E_BENCH_ARGS:-} --creds "$E2E_CREDS" "$@" </dev/null; }
+bench() { "$BENCH_BIN" ${E2E_BENCH_ARGS:-} --creds "$bench_creds" "$@" </dev/null; }
 
 daemon_log() { echo "$W/$1/data/telega-fs/main/telega-fs.log"; }
 data_dir() { echo "$W/$1/data/telega-fs/main"; }
@@ -204,6 +271,7 @@ cleanup() {
     local rc=$?
     set +e
     trap - ERR
+    [[ "$bench_creds" == "$W/bench-creds" ]] && rm -f "$bench_creds"
     trap '' INT TERM
     for p in "${sampler_pids[@]:-}"; do
         [[ -n "$p" ]] && kill "$p" 2>/dev/null
@@ -231,6 +299,19 @@ trap cleanup EXIT
 trap 'echo "[e2e] ERROR: command failed at line $LINENO (exit $?)" >&2; exit $EXIT_STAGE' ERR
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# tgfs-bench читает креды только из файла: собираем его из найденных значений (0600, убирается при
+# выходе). Свой канал: id кладётся в файл для подкоманд `tgfs-bench e2e`.
+bench_creds="$E2E_CREDS"
+if [[ "$E2E_STORE" == telegram ]]; then
+    bench_creds="$W/bench-creds"
+    (umask 077; printf 'api-id=%s\napi-hash=%s\nbot-token=%s\n' "$TELEGA_API_ID" "$TELEGA_API_HASH" "$bot_token" >"$bench_creds")
+fi
+chan_guard_start
+if [[ -n "$E2E_CHAT_ID" ]]; then
+    (umask 077; printf '%s\n' "$E2E_CHAT_ID" >"$W/chat-id")
+    E2E_CHAT_FILE="$W/chat-id"
+fi
 
 write_config() { # write_config МАШИНА: профиль main (бот или local)
     local m=$1
@@ -310,10 +391,20 @@ mount_on() {
         trace_args="$E2E_TRACE_ARGS"
         trace_env="$E2E_TRACE_ENV"
     fi
+    # mount идёт фоном под timeout, чтобы pid запускающего процесса был виден в pid-файле (lib.sh
+    # отказывается чистить канал, пока жив процесс этого прогона).
+    local mrc=0 mfile="$W/logs/mount-$m.cur" mp
     # shellcheck disable=SC2086
-    out="$(timeout 1200 env XDG_CONFIG_HOME="$W/$m/config" XDG_DATA_HOME="$W/$m/data" \
-        XDG_CACHE_HOME="$W/$m/cache" $trace_env "$TGFS_BIN" $trace_args mount "$@" "$mnt" 2>&1)" ||
-        { echo "$out" >&2; die "mount on $m"; }
+    timeout 1200 env XDG_CONFIG_HOME="$W/$m/config" XDG_DATA_HOME="$W/$m/data" \
+        XDG_CACHE_HOME="$W/$m/cache" $trace_env "$TGFS_BIN" $trace_args mount "$@" "$mnt" \
+        >"$mfile" 2>&1 &
+    mp=$!
+    echo "$mp" >"$W/$m.mount.pid"
+    wait "$mp" || mrc=$?
+    rm -f "$W/$m.mount.pid"
+    out="$(cat "$mfile")"
+    rm -f "$mfile"
+    [[ "$mrc" == 0 ]] || { echo "$out" >&2; die "mount on $m"; }
     echo "$out" >>"$W/logs/mount-$m.out"
     local pid
     pid="$(sed -n 's/.*mounted (pid \([0-9]*\),.*/\1/p' <<<"$out")"
@@ -539,16 +630,27 @@ stage_channel() {
         mkdir -p "$W/channel"
         return 0
     fi
+    if [[ -n "$E2E_CHAT_ID" ]]; then
+        log "checking that your channel is empty (the bot only, no user account); takes a few minutes"
+        ensure_channel_empty
+        rm -f "$W/state/channel-deleted" "$W/state/channel-reused"
+        return 0
+    fi
     if [[ "${E2E_REUSE_CHANNEL:-0}" == 1 ]]; then
         [[ -r "$E2E_CHAT_FILE" ]] || die "E2E_REUSE_CHANNEL=1 but E2E_CHAT_FILE does not exist"
         touch "$W/state/channel-reused"     # чужой канал final не удаляет
         return 0
     fi
     rm -f "$W/state/channel-deleted" "$W/state/channel-reused"
-    log "creating the channel (user account: setup only, no messages, SPEC 17.2)"
-    # Если сессия пользователя бенча не авторизована, setup падает: вход только по QR вручную.
+    log "creating the channel (user account: setup only, no messages)"
+    # Если сессия пользователя бенча не авторизована, setup падает: вход только вручную.
     bench e2e --chat-file "$E2E_CHAT_FILE" setup >"$W/logs/setup.out" 2>&1 ||
-        { tail -n 5 "$W/logs/setup.out" >&2; die "channel setup (see logs/setup.out)"; }
+        {
+            tail -n 5 "$W/logs/setup.out" >&2
+            echo "[e2e] the user account must be logged in to tgfs-bench (tgfs-bench --qr login);" >&2
+            echo "[e2e] or set E2E_CHAT_ID to a channel you made yourself, the bot is its administrator" >&2
+            die "channel setup (see logs/setup.out)"
+        }
 }
 
 stage_a_init() {
@@ -779,11 +881,11 @@ longest_flood() { # наибольшее ожидание по логам все
     echo "$max"
 }
 
-print_env() { # окружение прогона для отчёта (SPEC 17.2)
+print_env() { # окружение прогона для отчёта
     local dirty=""
     [[ -n "$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)" ]] && dirty=" + uncommitted changes"
     echo "[e2e] env: telega-fs $(git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo '?')$dirty, branch $(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?'); $(uname -sr); CPU $(sed -n 's/^model name[ \t]*: //p' /proc/cpuinfo | head -n1); $(ffmpeg -version 2>/dev/null | head -n1 | cut -d' ' -f1-3); fs of the work dir: $(stat -f -c %T "$W")"
-    echo "[e2e] profile: staging_limit $E2E_STAGING_LIMIT, cache_limit $E2E_CACHE_LIMIT, chunk_size ${E2E_CHUNK_MIB} MiB, other settings are the defaults of SPEC 12.2"
+    echo "[e2e] profile: staging_limit $E2E_STAGING_LIMIT, cache_limit $E2E_CACHE_LIMIT, chunk_size ${E2E_CHUNK_MIB} MiB, other settings are the defaults"
 }
 
 print_summary() {
@@ -866,6 +968,13 @@ run_stage() {
 
 teardown_channel() {
     [[ "$E2E_STORE" == telegram && -r "$E2E_CHAT_FILE" ]] || return 0
+    if [[ -n "$E2E_CHAT_ID" ]]; then
+        # Свой канал остаётся: бот удаляет только сообщения telega-fs, и только если этот рабочий
+        # каталог проверил канал пустым (маркер state/channel-claimed с тем же id).
+        chan_cleanup ||
+            { echo "[e2e] the cleanup did not complete: delete the pin and the .bin/.idx documents by hand (see $W/logs/)" >&2; return 1; }
+        return 0
+    fi
     log "teardown: deleting the channel (user account: delete only)"
     bench e2e --chat-file "$E2E_CHAT_FILE" teardown >"$W/logs/teardown.out" 2>&1 ||
         { echo "[e2e] teardown failed, delete the channel by hand (see $W/logs/teardown.out)" >&2; return 1; }
@@ -882,7 +991,7 @@ show_status() {
 
 case "$sub" in
     status) show_status; exit 0 ;;
-    teardown) teardown_channel; exit $? ;;
+    teardown) if teardown_channel; then exit 0; else exit 1; fi ;;
 esac
 
 # Сброс готовности: E2E_REDO и явный список этапов в аргументах.
@@ -911,20 +1020,29 @@ for s in "${STAGES[@]}"; do
 done
 
 if [[ -e "$(done_file final)" ]]; then
+    cleanup_failed=0
     print_summary
     if [[ "${E2E_KEEP_SESSIONS:-0}" != 1 ]]; then
         logout_machine A
     fi
     # Канал удаляется только если все проверки PASS: при FAIL данные канала нужны для разбора.
-    # Удалить вручную: tests/e2e/e2e_m3.sh teardown.
+    # Удалить вручную: tests/e2e/e2e_resources.sh teardown.
     if grep -q '|FAIL|' "$W/checks.txt"; then
-        echo "[e2e] the channel is kept because of FAIL checks; delete it with: $0 teardown"
+        echo "[e2e] the channel (its data) is kept because of FAIL checks; clean it with: $0 teardown"
     elif [[ "${E2E_KEEP_CHANNEL:-0}" != 1 && ! -e "$W/state/channel-deleted" &&
         ! -e "$W/state/channel-reused" ]]; then
-        teardown_channel && touch "$W/state/channel-deleted" || true
+        if teardown_channel; then
+            touch "$W/state/channel-deleted"
+        elif [[ -n "$E2E_CHAT_ID" ]]; then
+            cleanup_failed=1    # свой канал не очищен: об этом сообщаем кодом выхода
+        fi
     fi
     if grep -q '|FAIL|' "$W/checks.txt"; then
         echo "[e2e] E2E FAIL (work dir kept: $W)"
+        exit "$EXIT_CHECKS"
+    fi
+    if [[ "$cleanup_failed" == 1 ]]; then
+        echo "[e2e] E2E FAIL: all checks passed, but the channel cleanup did not complete (work dir kept: $W)"
         exit "$EXIT_CHECKS"
     fi
     echo "[e2e] E2E PASS (work dir kept: $W)"

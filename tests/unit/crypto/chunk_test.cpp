@@ -1,4 +1,4 @@
-// crypto/chunk: формат зашифрованного чанка (SPEC 5).
+// crypto/chunk: формат зашифрованного чанка.
 
 #include "crypto/chunk.h"
 
@@ -175,7 +175,7 @@ TEST_F(ChunkTest, HeaderLayout) {
     EXPECT_EQ(get_u64_le(ByteSpan{e.file}.subspan(32, 8)), 1000U);
 }
 
-// Независимая проверка раскладки SPEC 5: каждый сегмент расшифровывается напрямую libsodium
+// Независимая проверка раскладки формата чанка: каждый сегмент расшифровывается напрямую libsodium
 // с nonce = chunk_nonce || u64(i) и AD = fs_uuid || u64(chunk_id) || u64(i) || u8(is_last) ||
 // u64(plain_size), по смещениям [40 + i * 65552, ... + len_i + 16).
 TEST_F(ChunkTest, SegmentFormatMatchesSpec) {

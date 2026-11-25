@@ -49,17 +49,16 @@ constexpr size_t kDeleteBatch = 100;
 constexpr size_t kInfoCacheMax = 65'536;
 constexpr size_t kKnownIdsMax = 1U << 20;
 constexpr seconds kDefaultRetryAfter{60};  // 429 без retry_after
-// Всего попыток скачивания одного диапазона: повторы после отмены и исчезнувшего локального файла
-// (SPEC 10.2).
+// Всего попыток скачивания одного диапазона: повторы после отмены и исчезнувшего локального файла.
 constexpr int kMaxDownloadRounds = 5;
-constexpr uint64_t kSegmentSize = 65'536;  // SPEC 5
+constexpr uint64_t kSegmentSize = 65'536;  // сегмент шифрования чанка
 constexpr uint64_t kChunkHeaderSize = 40;
 constexpr uint64_t kSegmentTag = 16;
 
 // ---- Ошибки ------------------------------------------------------------------------------
 
 // Ошибки TDLib про файлы содержат полный локальный путь (в нём имя пользователя ОС): пути в
-// кавычках заменяются на <path>, чтобы они не попали ни в лог, ни в исключение (SPEC 11).
+// кавычках заменяются на <path>, чтобы они не попали ни в лог, ни в исключение.
 std::string scrub(std::string text) {
     size_t pos = 0;
     while ((pos = text.find('"', pos)) != std::string::npos) {
@@ -87,7 +86,7 @@ bool contains_ci(std::string_view haystack, std::string_view needle) {
 }
 
 // Отмена скачивания: TDLib отменяет downloadFile, если пришёл новый запрос на тот же файл (код 200)
-// или если первые запросы сеанса не прошли (код 400); повтор проходит (SPEC 10.2, E2E, E7).
+// или если первые запросы сеанса не прошли (код 400); повтор проходит (E2E, E7).
 bool is_download_canceled(const TdError& e) {
     return contains_ci(e.message, "File download has failed or was canceled") ||
            contains_ci(e.message, "Canceled by another downloadFile request");
@@ -117,7 +116,7 @@ StoreError store_error(const TdException& e, std::string_view what) {
 }
 
 // Повторяемые сбои скачивания (DownloadCanceled, LocalFileGone) объявлены в download_scheduler.h:
-// чтение повторяет их с обновлением file_id (SPEC 8.2, 10.2).
+// чтение повторяет их с обновлением file_id.
 //
 // Повтор не поможет, хотя ошибка не permanent по виду TDLib (проверка диапазона до скачивания).
 class NoRetryError : public StoreError {
@@ -211,7 +210,7 @@ Json send_options() {
 
 // ---- Файлы -------------------------------------------------------------------------------
 
-// Причина, по которой файл нельзя отправлять; nullopt — пригоден (SPEC 10.2). Пути в тексте нет.
+// Причина, по которой файл нельзя отправлять; nullopt — пригоден. Пути в тексте нет.
 std::optional<std::string> file_problem(const fs::path& path, std::optional<uint64_t> expected) {
     std::error_code ec;
     const auto status = fs::status(path, ec);
@@ -244,7 +243,7 @@ std::string random_hex16() {
     return std::string{buf.data(), 16};
 }
 
-// Документ в канале получает имя файла, по которому его отправили (SPEC 4: `<16 hex>.bin`), а
+// Документ в канале получает имя файла, по которому его отправили (`<16 hex>.bin`), а
 // файл чанка может называться как угодно и выдавать, например, номер чанка. Поэтому рядом с ним
 // создаётся жёсткая ссылка со случайным именем (копия, если ссылки не поддерживаются). Симлинк не
 // годится: TDLib разворачивает путь через realpath.
@@ -317,7 +316,7 @@ struct TelegramStore::Impl {
           tracker(c),
           upload_slots(
               static_cast<std::ptrdiff_t>(std::max<uint32_t>(options.upload_concurrency, 1))) {
-        // Порог альбомов считается по размеру зашифрованного файла (SPEC 5).
+        // Порог альбомов считается по размеру зашифрованного файла.
         const uint64_t t = options.album_max_doc_size;
         album_threshold =
             t + kChunkHeaderSize + kSegmentTag * ((t + kSegmentSize - 1) / kSegmentSize);
@@ -383,7 +382,7 @@ struct TelegramStore::Impl {
     std::counting_semaphore<> upload_slots;
     uint64_t album_threshold = 0;
 
-    // Скачивания идут через планировщик (SPEC 8.2): TDLib отменяет прежний downloadFile файла,
+    // Скачивания идут через планировщик: TDLib отменяет прежний downloadFile файла,
     // если пришёл новый запрос на тот же файл с другими offset и limit, поэтому по файлу активно
     // одно окно, а число одновременных окон ограничивает download_concurrency. Объявлен после
     // cache и пауз: его потоки зовут хуки, которые к ним обращаются (см. ~Impl).
@@ -400,7 +399,7 @@ struct TelegramStore::Impl {
     std::mutex read_pause_mu;
     Clock::time_point read_pause_until;
 
-    // getChat после старта (SPEC 2).
+    // getChat после старта.
     std::mutex chat_mu;
     bool chat_known = false;
 
@@ -413,7 +412,7 @@ struct TelegramStore::Impl {
     std::unordered_map<int64_t, CachedFile> info_cache;
     std::unordered_set<int64_t> known_ids;  // сообщения, которые TDLib знает в этом процессе
 
-    // Подсказки readahead (SPEC 8.2): prefetch() только ставит их в очередь, фоновый поток
+    // Подсказки readahead: prefetch() только ставит их в очередь, фоновый поток
     // получает file_id (getRemoteFile или getMessages) и отдаёт диапазон планировщику.
     struct PrefetchJob {
         ChunkRef ref;
@@ -505,7 +504,7 @@ struct TelegramStore::Impl {
 
     void start_read_pause(const TdError& e) {
         const auto base = retry_after_of(e);
-        // Джиттер до 10 % (SPEC 10.2), чтобы читатели не просыпались одновременно.
+        // Джиттер до 10 %, чтобы читатели не просыпались одновременно.
         thread_local std::mt19937_64 rng{std::random_device{}()};
         const double jitter = std::uniform_real_distribution<double>(0.0, 0.10)(rng);
         const auto until =
@@ -547,7 +546,7 @@ struct TelegramStore::Impl {
         }
     }
 
-    // getChat первым запросом по каналу (SPEC 2). open() делает это сам, остальные методы —
+    // getChat первым запросом по каналу. open() делает это сам, остальные методы —
     // лениво, если open() не звали.
     void ensure_chat(Clock::time_point deadline) {
         const std::lock_guard<std::mutex> lock(chat_mu);
@@ -621,7 +620,7 @@ struct TelegramStore::Impl {
         finish(job, std::nullopt, store_error(error, "send"), finished);
     }
 
-    // ---- Потерянный итог отправки (SPEC 10.2) ----
+    // ---- Потерянный итог отправки ----
 
     // Отправка, итог которой не пришёл вовремя. Документ мог всё же дойти, и тогда в канале
     // остался бы дубль, о котором не знает upload_journal. temp_id == 0: ответ на sendMessage не
@@ -770,7 +769,7 @@ struct TelegramStore::Impl {
         std::vector<DocOutcome> docs;
     };
 
-    // Один раунд отправки альбома: итог каждого документа свой (SPEC 10.2).
+    // Один раунд отправки альбома: итог каждого документа свой.
     AlbumAttempt attempt_album(const std::vector<UploadJob*>& jobs) {
         AlbumAttempt result;
         Json contents = Json::array();
@@ -839,7 +838,7 @@ struct TelegramStore::Impl {
         return result;
     }
 
-    // Доставка задания (SPEC 10.2): проверка файлов, лимитер, отправка альбомом (2+ документа) или
+    // Доставка задания: проверка файлов, лимитер, отправка альбомом (2+ документа) или
     // по одному, повторы при FLOOD_WAIT. Каждое задание получает итог в finish().
     void deliver(std::vector<UploadJob*> todo) {
         const std::vector<UploadJob*> all = todo;
@@ -1031,7 +1030,7 @@ struct TelegramStore::Impl {
 
     // ---- Скачивание ----
 
-    // Чтение диапазона через планировщик (SPEC 8.2): уже скачанное читается pread без downloadFile,
+    // Чтение диапазона через планировщик: уже скачанное читается pread без downloadFile,
     // иначе ждёт окно скачивания. deadline — от постановки запроса. Ошибки TDLib превращаются в
     // StoreError как у read_call; отмена и исчезнувший локальный файл — DownloadCanceled и
     // LocalFileGone (их повторяет retry_download).
@@ -1063,7 +1062,7 @@ struct TelegramStore::Impl {
         }
     }
 
-    // Скачивание с повторами (SPEC 8.2, 10.2). resolve(refresh) даёт файл для попытки: при
+    // Скачивание с повторами. resolve(refresh) даёт файл для попытки: при
     // refresh == true file_id берётся заново из getMessages, а кэш процесса сбрасывается; run(file)
     // качает и читает. Отмена downloadFile (transient) и исчезнувший локальный файл повторяются с
     // обновлением file_id, но всего попыток не больше kMaxDownloadRounds и не дольше deadline:
@@ -1101,7 +1100,7 @@ struct TelegramStore::Impl {
                     throw;
                 }
                 failed_once = true;
-                // После любой ошибки скачивания file_id берётся заново из сообщения (SPEC 8.2).
+                // После любой ошибки скачивания file_id берётся заново из сообщения.
                 spdlog::debug("TelegramStore: download failed ({}), refreshing the file id",
                               e.what());
             }
@@ -1134,7 +1133,7 @@ struct TelegramStore::Impl {
         return *file;
     }
 
-    // file_id по SPEC 8.2: кэш процесса, затем getRemoteFile (если размер правдоподобен),
+    // file_id: кэш процесса, затем getRemoteFile (если размер правдоподобен),
     // иначе getMessages.
     FileInfo resolve_file(const ChunkRef& ref, Clock::time_point deadline, bool force_messages) {
         uint64_t expected = 0;
@@ -1169,7 +1168,7 @@ struct TelegramStore::Impl {
         return lookup_message_file(ref.msg_id, deadline);
     }
 
-    // ---- Readahead и кэш чтения (SPEC 8.2) ----
+    // ---- Readahead и кэш чтения ----
 
     void queue_prefetch(const ChunkRef& ref, uint64_t offset, uint64_t len, uint32_t distance) {
         if (len == 0) {
@@ -1267,7 +1266,7 @@ struct TelegramStore::Impl {
     }
 
     // Удаление файла кэша: getRemoteFile и deleteFile, а если TDLib файл не знает или его
-    // local.path другой — прямо с диска (SPEC 8.2).
+    // local.path другой — прямо с диска.
     bool delete_cached(const ReadCacheEntry& e) {
         bool via_tdlib = false;
         if (!e.remote_file_id.empty()) {
@@ -1386,7 +1385,7 @@ struct TelegramStore::Impl {
                 Json{{"@type", "getChatPinnedMessage"}, {"chat_id", options.chat_id}}, deadline);
         } catch (const TdException& e) {
             if (e.error().code == 404) {
-                return std::nullopt;  // закреплённых нет (SPEC 2)
+                return std::nullopt;  // закреплённых нет
             }
             throw store_error(e, "getChatPinnedMessage");
         }
@@ -1396,7 +1395,7 @@ struct TelegramStore::Impl {
         }
         const auto file = document_file(message);
         if (!file) {
-            // Закреплено чужое сообщение, не документ (SPEC 7.2: потеря головы). Заголовка нет:
+            // Закреплено чужое сообщение, не документ (потеря головы). Заголовка нет:
             // вызывающий разберёт пустой заголовок как «не блоб индекса».
             note_known(id);
             HeadInfo foreign;
@@ -1588,7 +1587,7 @@ std::vector<bool> TelegramStore::messages_exist(std::span<const int64_t> msg_ids
                                          msg_ids.begin() + static_cast<std::ptrdiff_t>(end));
         const auto deadline = Impl::deadline_in(s.options.read_timeout);
         s.ensure_chat(deadline);
-        // read_call выжидает FLOOD_WAIT общей паузой лимитера (SPEC 10.2).
+        // read_call выжидает FLOOD_WAIT общей паузой лимитера.
         const Json reply = s.read_call(
             Json{{"@type", "getMessages"}, {"chat_id", s.options.chat_id}, {"message_ids", batch}},
             deadline, "getMessages");
@@ -1687,7 +1686,7 @@ void TelegramStore::set_head(int64_t new_msg_id, std::optional<int64_t> old_msg_
     if (!old_msg_id || *old_msg_id == new_msg_id) {
         return;
     }
-    // Ошибка unpin не страшна: головой считается самое новое закреплённое (SPEC 7.1 шаг 7).
+    // Ошибка unpin не страшна: головой считается самое новое закреплённое.
     try {
         if (!s.is_known(*old_msg_id)) {
             // После перезапуска процесса сообщение сначала надо загрузить, иначе 400 (E2).

@@ -16,7 +16,7 @@ using detail::uc;
 
 namespace {
 
-// Раскладка открытого заголовка блоба (SPEC 6.3). Всё, что после body_size, — нули.
+// Раскладка открытого заголовка блоба. Всё, что после body_size, — нули.
 constexpr std::array<char, 8> kMagic{'T', 'G', 'F', 'S', 'I', 'D', 'X', '1'};
 constexpr uint8_t kVersion = 1;
 constexpr size_t kOffVersion = 8;
@@ -145,7 +145,7 @@ Bytes seal_index_blob(const Key& k_index, IndexHeader header, ByteSpan body) {
         const size_t in_pos = b * kIndexStreamBlock;
         const size_t len = std::min(kIndexStreamBlock, body.size() - in_pos);
         const bool last = b + 1 == blocks;
-        // Весь заголовок — AD первого блока; у остальных блоков AD нет (SPEC 6.3).
+        // Весь заголовок — AD первого блока; у остальных блоков AD нет.
         const bool first = b == 0;
         unsigned long long written = 0;
         crypto_secretstream_xchacha20poly1305_push(

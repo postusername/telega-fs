@@ -85,7 +85,7 @@ void ChunkReader::fetch(const meta::Chunk& chunk, const store::ChunkRef& ref, ui
     };
     auto delay = opts_.retry_initial;
     for (;;) {
-        // Срок один на всё чтение чанка (SPEC 8.2): ни ожидание места среди скачиваний, ни повтор
+        // Срок один на всё чтение чанка: ни ожидание места среди скачиваний, ни повтор
         // не получают его заново, а повтор без остатка срока не начинается.
         {
             std::unique_lock lock(sem_mu_);
@@ -254,7 +254,7 @@ void ChunkReader::read(const meta::Chunk& chunk, uint64_t off, MutableByteSpan o
     }
 }
 
-// ---- Readahead (SPEC 8.2) ---------------------------------------------------------------
+// ---- Readahead ---------------------------------------------------------------
 
 void ChunkReader::forget_handle(uint64_t fh) {
     const std::lock_guard lock(ra_mu_);

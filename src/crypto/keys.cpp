@@ -143,7 +143,8 @@ WrappedKey wrap_key(const Key& kek, const Key& key) {
     WrappedKey out{};
     std::byte* nonce = out.data();
     randombytes_buf(nonce, crypto_secretbox_NONCEBYTES);
-    // crypto_secretbox_easy пишет mac(16) || ciphertext(32) — как раз раскладка из SPEC 11.
+    // crypto_secretbox_easy пишет mac(16) || ciphertext(32) — ровно раскладка wrapped_master /
+    // wrapped_tdlib в keyring.
     if (crypto_secretbox_easy(uc(out.data() + crypto_secretbox_NONCEBYTES), uc(key.data()),
                               Key::kSize, uc(nonce), uc(kek.data())) != 0) {
         throw std::runtime_error("crypto_secretbox_easy failed");

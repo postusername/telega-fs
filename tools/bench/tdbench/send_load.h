@@ -1,6 +1,6 @@
 #pragma once
 
-// Нагрузочная отправка документов ботом (E5, SPEC 17.8; E6, SPEC 17.9). Задание — один
+// Нагрузочная отправка документов ботом (E5; E6). Задание — один
 // документ (sendMessage) или альбом до 10 документов (sendMessageAlbum). Каждое задание
 // выполняется в своём потоке, число одновременно идущих заданий ограничено параллельностью.
 // Итог каждого документа берётся из своего журнала апдейтов updateMessageSendSucceeded/Failed
@@ -151,7 +151,7 @@ class SendLoad {
     td::Subscription failed_;
 };
 
-// Запрос sendMessage с документом по SPEC 4 (`send_document_request`).
+// Запрос sendMessage с документом как в telega-fs (`send_document_request`).
 [[nodiscard]] td::Json single_document_request(int64_t chat_id, const std::filesystem::path& file);
 // Запрос sendMessageAlbum с документами (до 10) с теми же флагами.
 [[nodiscard]] td::Json album_document_request(int64_t chat_id,

@@ -1,15 +1,15 @@
-// E11: снимок индекса без блокировки записи (SPEC 17.14). Варианты:
-//   (a) VACUUM INTO под блокировкой записи (M1/M2, база сравнения);
+// E11: снимок индекса без блокировки записи. Варианты:
+//   (a) VACUUM INTO под блокировкой записи (исходный вариант, база сравнения);
 //   (b) срез читательской транзакцией под блокировкой, backup API после блокировки, VACUUM копии;
 //   (bs) как (b), но копия с PRAGMA synchronous = OFF;
 //   (bi) как (bs), но вместо VACUUM на месте — VACUUM INTO нового файла с копии;
 //   (bn) как (bs), но без VACUUM копии;
-//   (m) реальный код M3: MetaStore::cut_snapshot под блокировкой, SnapshotCopy (backup, VACUUM
+//   (m) реальный код: MetaStore::cut_snapshot под блокировкой, SnapshotCopy (backup, VACUUM
 //   INTO)
 //       после неё; блокировка MetaStore — честная (FairRecursiveMutex);
 //   (c) то же через sqlite3_snapshot_get / sqlite3_snapshot_open (SQLITE_ENABLE_SNAPSHOT).
 // Во время снимка работает непрерывный писатель (MetaStore::write) и поток промежуточного
-// забора патча (rows_hook, SPEC 6.6). Корректность: снимок плюс патчи, забранные после среза,
+// забора патча (rows_hook). Корректность: снимок плюс патчи, забранные после среза,
 // применённые через sqlite3changeset_apply, построчно равны живому индексу.
 
 #include <sqlite3.h>
@@ -356,7 +356,7 @@ void cut_read_txn(meta::Db& reader) {
 // VACUUM пишет в -wal, а основной файл остаётся несжатым до контрольной точки), делаем VACUUM
 // и закрываем соединение: после этого файл самодостаточен.
 enum class Finish : uint8_t {
-    vacuum,  // VACUUM на месте (SPEC 6.6, как написано)
+    vacuum,  // VACUUM на месте
     into,  // VACUUM INTO нового файла с копии, сырая копия удаляется
     none,  // без VACUUM: копия как есть
 };
@@ -447,7 +447,7 @@ SnapTimes snapshot_b_impl(Harness& h, const fs::path& dest, bool sync_off, Finis
     return r;
 }
 
-// Реальный код M3: SnapshotCopy открывается заранее, под блокировкой только cut_snapshot.
+// Реальный код: SnapshotCopy открывается заранее, под блокировкой только cut_snapshot.
 SnapTimes snapshot_m(Harness& h, const fs::path& dest) {
     SnapTimes r;
     r.path = dest;
@@ -720,7 +720,7 @@ Verify verify_snapshot(Harness& h, ScratchFs& env, const fs::path& snap) {
     const auto patches = h.patches_after_cut();
     v.patches = static_cast<int64_t>(patches.size());
     meta::OpenOptions oo;
-    oo.foreign_keys = false;  // SPEC 6.6: патчи применяются с выключенными FK
+    oo.foreign_keys = false;  // патчи применяются с выключенными FK
     oo.wal = false;
     meta::Db db = meta::Db::open(copy, oo);
     auto t = Clock::now();

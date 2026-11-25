@@ -1,4 +1,4 @@
-// TelegramStore на фейковом транспорте TDLib (SPEC 3, 4, 7.1, 8.2, 10.1, 10.2).
+// TelegramStore на фейковом транспорте TDLib.
 
 #include "store/telegram_store.h"
 
@@ -158,7 +158,7 @@ TEST_F(TelegramStoreTest, OpenAcceptsChannelOwner) {
     EXPECT_NO_THROW(s.open());
     const auto seq = fake->sequence();
     ASSERT_FALSE(seq.empty());
-    EXPECT_EQ(seq.front(), "getChat");  // первым запросом по каналу (SPEC 2)
+    EXPECT_EQ(seq.front(), "getChat");  // первым запросом по каналу
 }
 
 TEST_F(TelegramStoreTest, OpenAcceptsAdministratorWithRights) {
@@ -425,7 +425,7 @@ TEST_F(TelegramStoreTest, AlbumWhereEveryDocumentFailsWith429IsRepeatedWhole) {
     std::set<std::string> seen;
     fake->set_verdict([&](const std::string& name, size_t) -> std::optional<Json> {
         const std::lock_guard<std::mutex> lock(mu);
-        // Первый раунд: все три документа получают 429 (лимит по действиям, SPEC 10.2).
+        // Первый раунд: все три документа получают 429 (лимит по действиям).
         if (seen.size() < 3) {
             seen.insert(name);
             round = 1;
@@ -633,7 +633,7 @@ TEST_F(TelegramStoreTest, SendTimeoutsAreTransient) {
     EXPECT_EQ(e->kind(), StoreErrorKind::transient);
     EXPECT_EQ(files_left(), 2U);
     // Потерянный итог: временное сообщение удалено ДО того, как вызывающий получил transient
-    // (SPEC 10.2), иначе поздно дошедшая отправка оставила бы дубль.
+    //, иначе поздно дошедшая отправка оставила бы дубль.
     const auto deletes = fake->requests("deleteMessages");
     ASSERT_EQ(deletes.size(), 1U);
     EXPECT_EQ(deletes[0]["message_ids"].size(), 1U);
@@ -715,7 +715,7 @@ TEST_F(TelegramStoreTest, AlbumDocumentsWithoutResultAreDeletedBeforeTransient) 
     EXPECT_EQ(deletes[0]["message_ids"].size(), 3U);
 }
 
-// send_timeout растёт с размером документа (SPEC 10.2): 3000 байт при 2000 Б/с дают 1,5 с
+// send_timeout растёт с размером документа: 3000 байт при 2000 Б/с дают 1,5 с
 // к базе 150 мс, итог через 600 мс ещё вовремя. На быстром канале (1 МиБ/с) тот же итог опоздал бы.
 TEST_F(TelegramStoreTest, SendTimeoutGrowsWithTheDocumentSize) {
     auto o = default_options();
@@ -897,7 +897,7 @@ TEST_F(ReadTest, RemoteFileIdWithKnownSizeSkipsGetMessages) {
     ASSERT_EQ(d.size(), 1U);
     EXPECT_EQ(d[0]["offset"], 1234);
     EXPECT_EQ(d[0]["limit"], 777);
-    EXPECT_EQ(d[0]["synchronous"], false);  // планировщик качает только асинхронно (SPEC 8.2)
+    EXPECT_EQ(d[0]["synchronous"], false);  // планировщик качает только асинхронно
     // Второе чтение берёт file_id из кэша процесса.
     EXPECT_EQ(read(ref, 0, 100), content.substr(0, 100));
     EXPECT_EQ(fake->count("getRemoteFile"), 1U);
@@ -991,7 +991,7 @@ TEST_F(ReadTest, CanceledDownloadsAreRetriedWithFreshFileIdUntilTheyPass) {
 }
 
 // «File download has failed or was canceled» TDLib отдаёт на любой неуспех, поэтому повторов
-// не больше 5 кругов, даже если до дедлайна далеко (SPEC 10.2).
+// не больше 5 кругов, даже если до дедлайна далеко.
 TEST_F(ReadTest, EndlessCancelsEndAsTransientAfterTheRoundLimit) {
     auto o = default_options();
     o.read_timeout = seconds{30};
@@ -1546,7 +1546,7 @@ TEST_F(TelegramStoreTest, DeleteSplitsIntoBatchesOf100WithRevoke) {
         EXPECT_EQ(d["chat_id"], kChatId);
     }
     EXPECT_TRUE(fake->messages().empty());
-    // Сообщения прошлых процессов предварительно загружаются getMessages (SPEC 7.1, E5).
+    // Сообщения прошлых процессов предварительно загружаются getMessages (E5).
     EXPECT_EQ(fake->count("getMessages"), 3U);
 }
 
@@ -1657,7 +1657,7 @@ TEST_F(TelegramStoreTest, RoundTripChunkIndexHeadAndDelete) {
     EXPECT_FALSE(s.read_head().has_value());
 }
 
-// ---- Планировщик скачиваний (SPEC 8.2, 10.2) ----------------------------------------------
+// ---- Планировщик скачиваний ----------------------------------------------
 
 // Скачиванием фейка управляет тест (manual): порядок исполнения и приоритеты детерминированы.
 // Ожидания — барьеры на наблюдаемые события (запрос дошёл до TDLib, читатель встал в очередь,
@@ -1999,7 +1999,7 @@ TEST_F(SchedTest, StalledDownloadIsRepeatedWithTheSameCall) {
     EXPECT_GE(store->download_stats().stalls, 1U);
 }
 
-// ---- Кэш чтения (SPEC 8.2) ------------------------------------------------------------------
+// ---- Кэш чтения ------------------------------------------------------------------
 
 class CacheTest : public TelegramStoreTest {
   protected:
@@ -2165,7 +2165,7 @@ TEST_F(CacheTest, AccountingIsSavedToTheStateTableAndSurvivesRestart) {
     }
 }
 
-// В --ro (SPEC 7.2) state_db не передаётся: учёт кэша идёт в памяти, вытеснение работает, а
+// В --ro state_db не передаётся: учёт кэша идёт в памяти, вытеснение работает, а
 // state.sqlite не меняется ни байтом (ни CREATE TABLE, ни сброса учёта, ни WAL).
 TEST_F(CacheTest, WithoutStateDbTheAccountingStaysInMemoryAndStateSqliteIsUntouched) {
     const auto snapshot = [&] {
@@ -2201,7 +2201,7 @@ TEST_F(CacheTest, WithoutPathsThereIsNoAccounting) {
     EXPECT_EQ(s.read_cache(), nullptr);
 }
 
-// ---- DownloadScheduler напрямую (SPEC 8.2): вытеснение, апдейты, readahead ----------------------
+// ---- DownloadScheduler напрямую: вытеснение, апдейты, readahead ----------------------
 
 class DirectSchedTest : public TelegramStoreTest {
   protected:
@@ -2453,7 +2453,7 @@ TEST_F(DirectSchedTest, WindowStartedAtTheFirstGapServesTheWaiterWithoutRepeated
     EXPECT_EQ(got, d.content.substr(500, 3000));
 }
 
-// Диагностика (SPEC 8.2): состояние файла в планировщике показывает окно, ждущих и последние
+// Диагностика: состояние файла в планировщике показывает окно, ждущих и последние
 // апдейты; то же уходит в лог (warning) при таймауте ожидания окна.
 TEST_F(DirectSchedTest, DescribeShowsTheWindowWaitersAndLastUpdates) {
     const Doc d = add_doc(9);

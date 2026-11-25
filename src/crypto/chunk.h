@@ -1,6 +1,6 @@
 #pragma once
 
-// Формат зашифрованного чанка (SPEC 5).
+// Формат зашифрованного чанка.
 
 #include <array>
 #include <cstddef>

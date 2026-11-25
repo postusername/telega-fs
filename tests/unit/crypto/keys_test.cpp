@@ -1,4 +1,4 @@
-// crypto/keys: ключи, подключи, KDF, keyfile, обёртка ключей, BLAKE2b, content_mac (SPEC 11, 6.2).
+// crypto/keys: ключи, подключи, KDF, keyfile, обёртка ключей, BLAKE2b, content_mac.
 
 #include "crypto/keys.h"
 
@@ -64,7 +64,7 @@ TEST_F(KeysTest, SubkeysMatchLibsodiumKdfWithSpecContextAndIds) {
     const Key master = Key::random();
     const SubKeys sub = derive_subkeys(master);
 
-    // Ожидаемые значения — напрямую из libsodium: контекст "TGFS_KDF", id 1/2/3 (SPEC 11).
+    // Ожидаемые значения — напрямую из libsodium: контекст "TGFS_KDF", id 1/2/3.
     const auto expect = [&](uint64_t id) {
         std::array<std::byte, 32> out{};
         crypto_kdf_derive_from_key(reinterpret_cast<unsigned char*>(out.data()), out.size(), id,

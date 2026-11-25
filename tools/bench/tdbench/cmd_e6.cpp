@@ -1,4 +1,4 @@
-// e6: альбомы в режиме бота (SPEC 17.9). Канал создаёт пользователь (setup, сообщений от
+// e6: альбомы в режиме бота. Канал создаёт пользователь (setup, сообщений от
 // пользователя нет), всю нагрузку несёт бот в отдельном каталоге сессии <state-dir>/bot-e6.
 //
 //   tgfs-bench e6 [--probe] setup      пользователь создаёт канал и добавляет бота администратором
@@ -62,7 +62,7 @@ constexpr int64_t kServerIdShift = 20;
 constexpr uint64_t kKiB = 1024;
 constexpr uint64_t kMiB = 1024 * kKiB;
 constexpr uint64_t kSeed = 0xE6E6E6E6ULL;
-constexpr int64_t kMaxFloodWaitSeconds = 3600;  // SPEC 17.2: больше часа — остановиться
+constexpr int64_t kMaxFloodWaitSeconds = 3600;  // больше часа — остановиться
 constexpr double kBandwidthShare = 0.8;
 constexpr int kMaxStepAttempts = 3;
 constexpr int kDeleteBatch = 100;
@@ -1308,7 +1308,7 @@ void cmd_teardown(BenchEnv& env, const BenchOptions& options, const E6Options& e
 }  // namespace
 
 void add_e6_command(CLI::App& app, const BenchOptions& options, int* exit_code) {
-    auto* cmd = app.add_subcommand("e6", "Experiment E6: albums in bot mode (SPEC 17.9)");
+    auto* cmd = app.add_subcommand("e6", "Experiment E6: albums in bot mode");
     cmd->require_subcommand(1);
     auto e6 = std::make_shared<E6Options>();
     e6->out = default_out_dir("06-e6-albums");

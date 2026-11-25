@@ -11,7 +11,7 @@ namespace telega::bench {
 namespace {
 
 constexpr int64_t kBatchFiles = 20'000;  // файлов в одной транзакции индекса
-constexpr int64_t kSegment = int64_t{64} * 1024;  // сегмент шифрования чанка (SPEC 5)
+constexpr int64_t kSegment = int64_t{64} * 1024;  // сегмент шифрования чанка
 constexpr int64_t kChunkOverhead = 64;  // заголовок чанка, порядок величины
 constexpr int64_t kSegmentTag = 17;  // +17 байт на сегмент
 constexpr int64_t kBaseTimeNs = 1'700'000'000'000'000'000;
@@ -112,7 +112,7 @@ struct Gen {
         pack_used = 0;
     }
 
-    // Файл «в пакете» (SPEC 6.5): один экстент idx = 0 на общий чанк kind = 2 с chunk_off.
+    // Файл «в пакете»: один экстент idx = 0 на общий чанк kind = 2 с chunk_off.
     void add_to_pack(meta::Db& db, int64_t ino, int64_t given = -1) {
         const int64_t size =
             given >= 0 ? given : rng.log_uniform(inline_max_param + 1, pack_threshold);
@@ -150,7 +150,7 @@ struct Gen {
         const Bytes data =
             given >= 0 && p.content ? p.content(rng, idx, len) : inline_content(rng, len);
         if (!meta::set_inline(db, ino, data, base_gen)) {
-            ++out.inline_overflow;  // бюджет исчерпан: как в SPEC 6.5, файл идёт в пакет
+            ++out.inline_overflow;  // бюджет исчерпан: как при запечатывании, файл идёт в пакет
             add_to_pack(db, ino, given);
             return;
         }

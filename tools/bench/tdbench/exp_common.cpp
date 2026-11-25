@@ -18,7 +18,7 @@ namespace telega::bench {
 
 namespace {
 
-constexpr int64_t kMaxFloodWaitSeconds = 3600;  // SPEC 17.2: больше часа — остановиться
+constexpr int64_t kMaxFloodWaitSeconds = 3600;  // больше часа — остановиться
 constexpr int kMaxFloodEvents = 5;  // не молотить по лимитам: дальше решает человек
 
 std::string csv_field(const std::string& f) {

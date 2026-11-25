@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Офлайн-часть E8 (SPEC 17.11): сколько сообщений экономит инлайн по сравнению с пакетами.
+# Офлайн-часть E8: сколько сообщений экономит инлайн по сравнению с пакетами.
 # Все прогоны tgfs-sim, из которых сделан отчёт. Размеры снимков и дельт индекса даёт
 # `tgfs-e8 index` (run-e8-index.sh), а не симулятор: модель блобов индекса в tgfs-sim грубая.
 # Использование: tools/bench/e8/run-e8.sh <tgfs-sim> <tgfs-e8> <каталог вывода> <рабочий каталог>
 # Пакеты по итогам E9: pack_threshold 4 МиБ, pack_target 16 МиБ, pack_max_age 30 с; коммиты с
-# отсрочкой при заливке (SPEC 7.1, 5 · commit_interval).
+# отсрочкой при заливке (5 · commit_interval).
 set -euo pipefail
 
 sim=${1:?usage: run-e8.sh <tgfs-sim> <tgfs-e8> <out dir> <work dir>}
@@ -38,7 +38,7 @@ for budget in 4MiB 16MiB 64MiB; do
         --scenario switch --seeds 5 --step-gap 60 "${flags[@]}"
     run "c1_switch_rev_$budget" --events "$corpora/c1-switch-rev.csv" --dataset c1-switch-rev \
         --scenario switch --seeds 5 --step-gap 60 "${flags[@]}"
-    # fsync после 2 % файлов: инлайн-файл не закрывает пакет (SPEC 8.1)
+    # fsync после 2 % файлов: инлайн-файл не закрывает пакет
     run "c1_fsync_$budget" --events "$corpora/c1-switch.csv" --dataset c1-switch \
         --scenario fsync --seeds 5 --step-gap 60 --fsync-prob 0.02 "${flags[@]}"
     run "c2_$budget" --hist "$corpora/c2-sizes.csv" --dataset c2 --scenario unpack --seeds 3 \

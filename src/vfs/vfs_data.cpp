@@ -1,4 +1,4 @@
-// Vfs: пути данных — запись в overlay, чтение, truncate, fsync (SPEC 6.2, 8.1, 8.2).
+// Vfs: пути данных — запись в overlay, чтение, truncate, fsync.
 
 #include <fcntl.h>
 #include <spdlog/spdlog.h>
@@ -44,7 +44,7 @@ void Vfs::read_staging(const ChunkKey& key, uint64_t off, MutableByteSpan out) {
     std::fill(out.begin() + static_cast<std::ptrdiff_t>(got), out.end(), std::byte{0});
 }
 
-// --- чтение (SPEC 8.2) ---
+// --- чтение ---
 
 Bytes Vfs::read(int64_t ino, uint64_t off, size_t size, uint64_t fh) {
     check_alive();
@@ -52,8 +52,8 @@ Bytes Vfs::read(int64_t ino, uint64_t off, size_t size, uint64_t fh) {
     // без неё. std::shared_mutex (glibc) предпочитает читателей, и перекрывающиеся медленные
     // чтения не пускали бы write, fsync и применение чанков и пакетов на этой полосе. Чанк в
     // индексе неизменяем, а его сообщение живёт ещё retain_generations коммитов после того, как
-    // refcount упал до нуля (SPEC 7.4), так что чтение, обогнавшее запись, вернёт прежние данные
-    // (допустимо: чтение, конкурентное с записью, не обязано видеть её, SPEC 9).
+    // refcount упал до нуля, так что чтение, обогнавшее запись, вернёт прежние данные
+    // (допустимо: чтение, конкурентное с записью, не обязано видеть её).
     struct Remote {
         meta::Chunk chunk;
         uint64_t off = 0;
@@ -81,7 +81,7 @@ Bytes Vfs::read(int64_t ino, uint64_t off, size_t size, uint64_t fh) {
             inline_data = meta_.read([&](Db& db) { return meta::get_inline(db, ino); });
         }
         const auto s = static_cast<uint64_t>(chunk_size_);
-        // Readahead (SPEC 8.2) идёт до самого чтения: скачивание вперёд — параллельно с ним.
+        // Readahead идёт до самого чтения: скачивание вперёд — параллельно с ним.
         if (fh != 0) {
             reader_->readahead(
                 fh, off, n, file_size, s, [&](int64_t idx) -> std::optional<ReadaheadTarget> {
@@ -143,7 +143,7 @@ Bytes Vfs::read(int64_t ino, uint64_t off, size_t size, uint64_t fh) {
     return out;
 }
 
-// --- запись (SPEC 8.1) ---
+// --- запись ---
 
 Vfs::Seed Vfs::seed_for(int64_t ino, int64_t idx, const Inode& inode,
                         const std::optional<std::pair<uint64_t, uint64_t>>& write_range,
@@ -187,7 +187,7 @@ void Vfs::materialize(int64_t ino, int64_t idx, const Seed& seed,
                 pwrite_full(fd.get(), *inline_data, 0);
             }
         } else if (seed.chunk && seed.len > 0) {
-            // RMW (SPEC 8.1): расшифровка прямо в staging-файл кусками, без буфера на чанк.
+            // RMW: расшифровка прямо в staging-файл кусками, без буфера на чанк.
             const uint64_t seg = std::max<uint64_t>(opts_.rmw_segment, 1);
             Bytes buf(static_cast<size_t>(std::min(seg, seed.len)));
             uint64_t peak = rmw_peak_.load();
@@ -219,12 +219,12 @@ size_t Vfs::write(int64_t ino, uint64_t off, ByteSpan data) {
     for (;;) {
         uint64_t shortage = 0;
         if (write_locked(ino, off, data, shortage)) {
-            // Выше порога: запечатать самые старые без seal_delay (SPEC 8.1, 8.3). Вне полосы.
+            // Выше порога: запечатать самые старые без seal_delay. Вне полосы.
             relieve_pressure(0);
             return data.size();
         }
         // Места не хватило: ждать вне полосы inode, иначе применение пакета, которое освобождает
-        // место, встало бы на той же полосе (SPEC 6.5, 8.3).
+        // место, встало бы на той же полосе.
         wait_for_space(shortage, deadline);
     }
 }
@@ -255,7 +255,7 @@ bool Vfs::write_locked(int64_t ino, uint64_t off, ByteSpan data, uint64_t& short
     };
     std::vector<Step> steps;
     std::optional<Bytes> inline_data;
-    // План: что создаётся, чем наполняется и сколько места нужно (SPEC 8.3). Растёт только то,
+    // План: что создаётся, чем наполняется и сколько места нужно. Растёт только то,
     // что реально увеличивает staging-файл: truncate вверх и дыры места не занимают.
     uint64_t need = 0;
     const auto plan = [&](int64_t idx, uint64_t from, uint64_t to,
@@ -350,7 +350,7 @@ bool Vfs::write_locked(int64_t ino, uint64_t off, ByteSpan data, uint64_t& short
     return true;
 }
 
-// --- truncate (SPEC 6.2) ---
+// --- truncate ---
 
 void Vfs::clamp_index(Db& db, int64_t ino, int64_t size) {
     const int64_t gen = base_gen();
@@ -431,7 +431,7 @@ void Vfs::truncate_locked(int64_t ino, const Inode& inode, int64_t new_size) {
     }
 }
 
-// --- fsync (SPEC 7.3, 8.1) ---
+// --- fsync ---
 
 void Vfs::fsync(int64_t ino) {
     check_alive();
@@ -453,7 +453,7 @@ void Vfs::fsync(int64_t ino) {
     }
     const auto targets = seal_file(ino, SealMode::explicit_request);
     // fsync файла из открытого пакета закрывает пакет; если объект уже в заливаемом пакете,
-    // закрывать нечего: ждём его заливку (SPEC 6.5).
+    // закрывать нечего: ждём его заливку.
     packs_->close_for(ino);
     wait_targets(targets);
     commit_or_throw();

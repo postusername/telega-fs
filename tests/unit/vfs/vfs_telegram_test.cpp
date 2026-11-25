@@ -1,5 +1,5 @@
-// Vfs поверх TelegramStore на фейковом транспорте TDLib: параллельность загрузок (SPEC 8.1) и
-// чтение чанка, который этот же процесс только что залил (SPEC 8.2).
+// Vfs поверх TelegramStore на фейковом транспорте TDLib: параллельность загрузок и
+// чтение чанка, который этот же процесс только что залил.
 
 #include <gtest/gtest.h>
 
@@ -90,7 +90,7 @@ TEST_F(VfsTelegram, TwentySmallDirtyChunksReachTheStoreAsAlbumsOfTen) {
 }
 
 // Чанк, залитый этим процессом, читается сразу: для TDLib он локальный, а ссылки, с которой он
-// ушёл, уже нет. TDLib сам замечает это перед downloadFile и качает с сервера (SPEC 10.2), а
+// ушёл, уже нет. TDLib сам замечает это перед downloadFile и качает с сервера, а
 // deleteFile Store не зовёт: для файла вне files_directory он ничего не делает.
 TEST_F(VfsTelegram, ChunkUploadedByThisProcessIsReadBackAfterTheLinkIsGone) {
     fake->set_sent_files_stale(true);

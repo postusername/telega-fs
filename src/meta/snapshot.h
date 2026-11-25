@@ -1,7 +1,7 @@
 #pragma once
 
-// Снимок индекса без долгой блокировки записи (SPEC 6.6, «Снимок без блокировки записи (M3)»,
-// SPEC 7.1 шаг 2; выбор способа — E11, docs/experiments/12-e11-snapshot.md).
+// Снимок индекса без долгой блокировки записи (шаг 2 коммита; выбор способа — E11,
+// docs/experiments/12-e11-snapshot.md).
 //
 // Три шага:
 // 1. Под блокировкой MetaStore: MetaStore::cut_snapshot(reader) пересоздаёт сессию без забора
@@ -89,7 +89,7 @@ class SnapshotCopy {
     // Читательское соединение для MetaStore::cut_snapshot.
     [[nodiscard]] SnapshotReader& reader() noexcept { return reader_; }
 
-    // Шаги 3 раздела 6.6: backup (после cut_snapshot), COMMIT читательской транзакции, затем
+    // Шаг копии: backup (после cut_snapshot), COMMIT читательской транзакции, затем
     // journal_mode = DELETE, VACUUM INTO out, закрытие копии, удаление .raw. Любой сбой —
     // исключение (SqliteError или из хука), читательская транзакция закрыта, .raw и out убраны.
     SnapshotCopyStats copy();

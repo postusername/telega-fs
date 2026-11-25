@@ -1,4 +1,4 @@
-// e9: холодное чтение мелких файлов из пакетов (SPEC 17.12), только в режиме бота. Канал создаёт
+// e9: холодное чтение мелких файлов из пакетов, только в режиме бота. Канал создаёт
 // пользователь (только настройка), документы заливает и скачивает бот в своей сессии
 // <state-dir>/bot-e9. Сообщений от бота немного: по одному документу на пакет и на размер файла.
 //
@@ -6,9 +6,9 @@
 //   tgfs-bench e9 run        холодные чтения: основной сеанс бота и сеанс с пустой БД
 //   tgfs-bench e9 teardown   удалить канал и состояние
 //
-// Что меряется. Пакет — документ из seed-данных длиной как зашифрованный чанк (SPEC 5: 40 байт
+// Что меряется. Пакет — документ из seed-данных длиной как зашифрованный чанк (40 байт
 // заголовка, сегменты по 64 КиБ плюс 16 байт тега). Файл размером `len` лежит в пакете по
-// смещению `off` открытого текста, читается диапазон зашифрованных сегментов (SPEC 5, 8.2):
+// смещению `off` открытого текста, читается диапазон зашифрованных сегментов:
 // `downloadFile(offset, limit, synchronous)` после `deleteFile`, затем `pread` по local.path.
 // Сравнивается с отдельным документом такого же размера (чанк из одного маленького файла),
 // который читается целиком. Время = скачивание + чтение; данные сверяются с seed.
@@ -70,7 +70,7 @@ std::vector<int64_t> parse_list(const std::string& text) {
     return out;
 }
 
-// Размер зашифрованного чанка с открытым текстом `plain` байт (SPEC 5).
+// Размер зашифрованного чанка с открытым текстом `plain` байт.
 int64_t encrypted_size(int64_t plain) {
     return kHeader + plain + ((plain + kSegment - 1) / kSegment) * 16;
 }
@@ -246,7 +246,7 @@ class E9Bench {
         if (!wait_chat_known(c, chat_id_, seconds{90}, &err)) {
             throw std::runtime_error("the bot does not see the channel: " + err);
         }
-        // file_id документов: getMessages (SPEC 8.2, основной путь по итогам E4).
+        // file_id документов: getMessages (основной путь по итогам E4).
         std::map<std::string, int32_t> file_ids;
         for (const Doc& d : docs()) {
             const auto t0 = ExpClock::now();
@@ -449,7 +449,7 @@ void cmd_setup(BenchEnv& env, const BenchOptions& options, const E9Options& e9) 
             }
         }
     };
-    // Не больше 10 отправок в минуту (SPEC 17.2), крупные документы по лимиту байт (E5) безопасны.
+    // Не больше 10 отправок в минуту, крупные документы по лимиту байт (E5) безопасны.
     SendPacer pacer(std::chrono::milliseconds{6500});
     const fs::path dir = options.state_dir / "e9";
     uint64_t index = 0;
@@ -536,8 +536,7 @@ void cmd_teardown(BenchEnv& env, const BenchOptions& options, const E9Options& e
 }  // namespace
 
 void add_e9_command(CLI::App& app, const BenchOptions& options, int* exit_code) {
-    auto* cmd =
-        app.add_subcommand("e9", "Experiment E9: cold reads from packs, bot mode (SPEC 17.12)");
+    auto* cmd = app.add_subcommand("e9", "Experiment E9: cold reads from packs, bot mode");
     cmd->require_subcommand(1);
     auto e9 = std::make_shared<E9Options>();
     e9->out = default_out_dir("09-e9-packs");
@@ -563,12 +562,11 @@ void add_e9_command(CLI::App& app, const BenchOptions& options, int* exit_code) 
     });
 
     auto* run = cmd->add_subcommand("run", "Cold read measurements");
-    run->add_option("--repeats", e9->repeats, "Repeats per target (>= 5, SPEC 17.2)")
-        ->capture_default_str();
+    run->add_option("--repeats", e9->repeats, "Repeats per target (>= 5)")->capture_default_str();
     run->add_option("--db", e9->db, "main | fresh | both")->capture_default_str();
     run->callback([&options, exit_code, e9] {
         if (e9->repeats < 5) {
-            std::cerr << "repeats must be >= 5 (SPEC 17.2)\n";
+            std::cerr << "repeats must be >= 5\n";
             *exit_code = 2;
             return;
         }

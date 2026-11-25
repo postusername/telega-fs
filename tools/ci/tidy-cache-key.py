@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Ключ кэша результатов clang-tidy для одного файла (SPEC 15.6).
+# Ключ кэша результатов clang-tidy для одного файла.
 # usage: tidy-cache-key.py <build-dir> <file.cpp> <clang-tidy-version-text>
 #
 # Ключ — SHA-256 от препроцессированного TU, флагов компиляции (без пути выходного файла),

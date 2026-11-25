@@ -1,4 +1,4 @@
-// Уплотнение пакетов (SPEC 6.5), см. pack_compact.h.
+// Уплотнение пакетов, см. pack_compact.h.
 
 #include "vfs/pack_compact.h"
 
@@ -96,7 +96,7 @@ class Compactor {
   private:
     // Собрать, залить и применить один новый пакет из живых объектов batch.
     void repack(const std::vector<meta::Extent>& batch, int64_t total, CompactResult& result) {
-        // Место под открытый текст и зашифрованный файл (SPEC 8.3): целиком и до всего остального.
+        // Место под открытый текст и зашифрованный файл: целиком и до всего остального.
         std::optional<StagingBudget::Lease> lease;
         if (ctx_.budget != nullptr) {
             const auto plain_max = static_cast<uint64_t>(total);
@@ -151,7 +151,7 @@ class Compactor {
                 lease->shrink_to(static_cast<uint64_t>(enc_size));
             }
 
-            // Заливка: журнал, чтобы сбой не оставил сироту без следа (SPEC 7.2, шаг 7).
+            // Заливка: журнал, чтобы сбой не оставил сироту без следа.
             ctx_.state.upload_started(chunk_id, now_ns());
             store::ChunkRef ref;
             try {

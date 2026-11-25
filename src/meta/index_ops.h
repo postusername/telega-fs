@@ -1,6 +1,6 @@
 #pragma once
 
-// Операции над index.sqlite (SPEC 6.2, 6.5, 7.4) — свободные функции над соединением.
+// Операции над index.sqlite — свободные функции над соединением.
 // Читающие функции работают на любом соединении (MetaStore::read или внутри write).
 // Меняющие функции ДОЛЖНЫ вызываться внутри транзакции на писательском соединении
 // (MetaStore::write): многие из них — несколько выражений, согласованных только вместе.
@@ -8,7 +8,7 @@
 // Ошибки уровня ФС — FsError с errno, нарушение внутренних инвариантов (refcount ниже нуля,
 // экстент у инлайн-файла) — std::logic_error, ошибки SQLite — SqliteError.
 //
-// Правила учёта чанков (SPEC 6.5, 7.4):
+// Правила учёта чанков:
 // - refcount — число экстентов, ссылающихся на чанк; live_bytes — сумма их len.
 // - когда refcount падает до 0, dead_since_gen = base_gen (последнее закоммиченное поколение,
 //   в котором чанк ещё мог быть жив); когда растёт с 0 — dead_since_gen = NULL.
@@ -154,7 +154,7 @@ void detach_inode(Db& db, int64_t ino);
 // Удалить inode: освободить экстенты (refcount--, live_bytes -= len), удалить строку.
 // Непустой каталог — ENOTEMPTY, корень — EINVAL, нет inode — ENOENT.
 void delete_inode(Db& db, int64_t ino, int64_t base_gen);
-// inode с parent IS NULL, кроме корня (SPEC 7.2, шаг 8).
+// inode с parent IS NULL, кроме корня (файлы, удалённые при открытом дескрипторе).
 std::vector<int64_t> list_detached(Db& db);
 
 // --- экстенты ---
@@ -170,7 +170,7 @@ void put_extent(Db& db, const Extent& extent, int64_t base_gen);
 // Удалить экстенты с idx ≥ first_idx, освободив их чанки.
 void drop_extents_from(Db& db, int64_t ino, int64_t first_idx, int64_t base_gen);
 // Уменьшить len экстента (частичный последний при truncate), live_bytes -= разница.
-// Увеличивать нельзя: хвост после обратного расширения обязан читаться нулями (SPEC 6.2).
+// Увеличивать нельзя: хвост после обратного расширения обязан читаться нулями.
 // Нет экстента — logic_error, len вне 1..old.len — invalid_argument.
 void set_extent_len(Db& db, int64_t ino, int64_t idx, int64_t len);
 
@@ -181,15 +181,15 @@ int64_t alloc_chunk_id(Db& db);
 // Вставить строку чанка с refcount = 0, live_bytes = 0, dead_since_gen = base_gen.
 void insert_chunk(Db& db, const NewChunk& chunk, int64_t base_gen);
 std::optional<Chunk> get_chunk(Db& db, int64_t chunk_id);
-// Живой (refcount > 0) позиционный чанк с тем же content_mac и plain_size (дедупликация, SPEC 8.1,
-// шаг 2; SPEC 6.5: только kind 1). Мёртвый чанк не находится: его сообщение могла удалить уборка,
-// а строка осталась в индексе канала.
-// Нулевой MAC (так fsck --repair помечает битые чанки) и MAC не из 32 байт не находятся.
-// Вызывать под блокировкой записи вместе с put_extent, иначе уборка может удалить строку.
+// Живой (refcount > 0) позиционный чанк с тем же content_mac и plain_size (дедупликация; только
+// kind 1, пакеты не участвуют). Мёртвый чанк не находится: его сообщение могла удалить уборка, а
+// строка осталась в индексе канала. Нулевой MAC (так fsck --repair помечает битые чанки) и MAC не
+// из 32 байт не находятся. Вызывать под блокировкой записи вместе с put_extent, иначе уборка может
+// удалить строку.
 std::optional<Chunk> find_chunk_by_mac(Db& db, ByteSpan mac, int64_t plain_size);
 // Мёртвые чанки (refcount = 0) с dead_since_gen ≤ max_dead_gen, по chunk_id, не больше limit.
 std::vector<Chunk> list_gc_candidates(Db& db, int64_t max_dead_gen, int64_t limit = INT64_MAX);
-// Пакеты для уплотнения (SPEC 6.5): kind = 2, refcount > 0 и live_bytes / plain_size <
+// Пакеты для уплотнения: kind = 2, refcount > 0 и live_bytes / plain_size <
 // ratio_ppm / 1 000 000, по chunk_id.
 std::vector<Chunk> list_compaction_candidates(Db& db, int64_t ratio_ppm);
 // Живые экстенты этих пакетов (один проход по extents), по chunk_id и chunk_off.
@@ -197,7 +197,7 @@ std::vector<Extent> list_compaction_extents(Db& db, int64_t ratio_ppm);
 // Удалить строку чанка. Живой чанк (refcount > 0) — logic_error.
 void delete_chunk_row(Db& db, int64_t chunk_id);
 
-// --- инлайн (SPEC 6.5) ---
+// --- инлайн ---
 
 // Сделать файл инлайн: если data.size() ≤ inline_max и inline_total() без старых данных
 // этого файла плюс data.size() ≤ inline_budget, удалить все экстенты (освобождая чанки),
@@ -216,7 +216,7 @@ int64_t inline_total(Db& db);
 void add_history(Db& db, int64_t generation, int64_t msg_id, BlobKind kind);
 // По возрастанию generation.
 std::vector<HistoryEntry> list_history(Db& db);
-// Удалить записи с generation ≤ max_generation (уборка старых цепочек, SPEC 7.4).
+// Удалить записи с generation ≤ max_generation (уборка старых цепочек).
 void delete_history_upto(Db& db, int64_t max_generation);
 
 // --- meta ---

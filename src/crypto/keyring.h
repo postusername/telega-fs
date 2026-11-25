@@ -1,6 +1,6 @@
 #pragma once
 
-// Локальный keyring (SPEC 11): обёрнутые master_key и tdlib_db_key, 256 байт.
+// Локальный keyring: обёрнутые master_key и tdlib_db_key, 256 байт.
 
 #include <filesystem>
 #include <optional>
@@ -21,7 +21,7 @@ struct KeyringFile {
     bool operator==(const KeyringFile&) const = default;
 };
 
-// Keyring без ФС (SPEC 11, «Keyring до init»): fs_uuid и wrapped_master нулевые, KDF и
+// Keyring без ФС (создаётся до init): fs_uuid и wrapped_master нулевые, KDF и
 // wrapped_tdlib настоящие. Его создаёт login, init дописывает ФС, монтирование на новой машине
 // разворачивает master_key из головы канала.
 [[nodiscard]] bool keyring_has_fs(const KeyringFile& keyring);

@@ -260,7 +260,7 @@ class CountingStore final : public store::Store {
     int max_inflight_ = 0;
 };
 
-// SPEC 8.1, «Параллельность загрузок»: одновременных put_chunk ровно upload_concurrency, если
+// Одновременных put_chunk ровно upload_concurrency, если
 // Store не собирает альбомы (LocalDirStore); с альбомами — min(10 · upload_concurrency, 32).
 int max_put_chunk_calls(VfsEnv& env, bool albums, uint32_t upload_concurrency, int files,
                         int expect) {
@@ -311,7 +311,7 @@ TEST(VfsUploadParallelism, AlbumStoreGetsTenPerSlotUpToThirtyTwo) {
 }
 
 // Сетевая часть чтения идёт без полосы inode: std::shared_mutex (glibc) предпочитает читателей, и
-// перекрывающиеся медленные чтения иначе не пускали бы писателя на ту же полосу (SPEC 9).
+// перекрывающиеся медленные чтения иначе не пускали бы писателя на ту же полосу.
 // Читатели стоят внутри Store::read_range (ворота), писатель в это время должен пройти.
 TEST(VfsReadStripe, WriterOnTheSameStripeDoesNotWaitForSlowOverlappingReads) {
     VfsEnv env(4096, 16 << 20, 1 << 16, 256 << 10);

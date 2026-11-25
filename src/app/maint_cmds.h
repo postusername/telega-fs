@@ -1,6 +1,6 @@
 #pragma once
 
-// Обслуживающие команды без FUSE: fsck и recover --export-dirty (SPEC 12.3). Работают под lock
+// Обслуживающие команды без FUSE: fsck и recover --export-dirty. Работают под lock
 // профиля и при смонтированной ФС отказываются.
 
 #include <filesystem>

@@ -1,4 +1,4 @@
-// Тесты ресурсов на LocalDirStore (SPEC 14): ресурсы демона при копировании большого файла,
+// Тесты ресурсов на LocalDirStore: ресурсы демона при копировании большого файла,
 // ENOSPC при полном staging и чтение с перемоткой. Демон монтирования идёт отдельным процессом
 // (telega-fs mount -f), поэтому его память и занятое место staging меряются снаружи по /proc и
 // по файлам. Без /dev/fuse тесты пропускаются через GTEST_SKIP.
@@ -52,7 +52,7 @@ fs::path heavy_dir() {
 
 double to_mib(uint64_t bytes) { return static_cast<double>(bytes) / static_cast<double>(kMiB); }
 
-// staging/ и tmp/ профиля: вместе они считаются занятым местом (SPEC 8.3).
+// staging/ и tmp/ профиля: вместе они считаются занятым местом.
 std::vector<fs::path> staging_dirs(const Env& e) {
     return {e.data_dir() / "staging", e.data_dir() / "tmp"};
 }
@@ -104,7 +104,7 @@ std::optional<ProcMem> read_proc_mem(pid_t pid) {
     return m;
 }
 
-// Сумма длин обычных файлов под каталогами (SPEC 8.3: логическая длина, а не st_blocks).
+// Сумма длин обычных файлов под каталогами (логическая длина, а не st_blocks).
 // Файлы появляются и исчезают во время обхода: такие записи пропускаются.
 uint64_t used_bytes(const std::vector<fs::path>& dirs) {
     uint64_t total = 0;
@@ -457,7 +457,7 @@ TEST_F(Resources, CopyOneGiBKeepsMemoryAndStagingWithinLimits) {
     run_copy_scenario(e, sc);
 }
 
-// Вручную (метка long): 10 ГиБ при staging_limit 1 ГиБ и заливке 50 МиБ/с (SPEC 14).
+// Вручную (метка long): 10 ГиБ при staging_limit 1 ГиБ и заливке 50 МиБ/с.
 class ResourcesLong : public Resources {};
 
 TEST_F(ResourcesLong, CopyTenGiBKeepsMemoryAndStagingWithinLimits) {
@@ -630,7 +630,7 @@ void run_enospc_scenario(Resources& t, int writer_count) {
 // Писателей меньше потоков цикла FUSE (libfuse: 10 по умолчанию).
 TEST_F(Resources, FullStagingGivesEnospcAndReadsStayResponsive) { run_enospc_scenario(*this, 8); }
 
-// Писателей больше потоков цикла FUSE: заблокированные write не должны занять их все (SPEC 8.3).
+// Писателей больше потоков цикла FUSE: заблокированные write не должны занять их все.
 TEST_F(Resources, ManyBlockedWritesDoNotStarveOtherOperations) { run_enospc_scenario(*this, 12); }
 
 // --- чтение с перемоткой ---

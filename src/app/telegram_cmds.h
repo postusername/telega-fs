@@ -1,7 +1,7 @@
 #pragma once
 
 // Telegram в приложении: хранилище профиля (сессия TDLib, лимитер, TelegramStore), разблокировка
-// keyring до init (SPEC 11) и команды login, logout, init для store = "telegram" (SPEC 12.3).
+// keyring до init и команды login, logout, init для store = "telegram".
 // Без TDLib: транспорт приходит через set_transport_factory (app/tg_session.h).
 
 #include <filesystem>
@@ -34,7 +34,7 @@ crypto::Key unlock_tdlib_key_or_throw(const crypto::KeyringFile& keyring,
                                       const meta::KeySource& source);
 
 // Telegram-хранилище профиля. Деструктор закрывает в обратном порядке: TelegramStore, лимитер,
-// клиент TDLib (close) и TdRuntime (SPEC 10.1).
+// клиент TDLib (close) и TdRuntime.
 class TelegramBackend {
   public:
     TelegramBackend(const Loaded& loaded, const crypto::Key& tdlib_db_key);
@@ -45,10 +45,10 @@ class TelegramBackend {
     // Авторизация без ввода. Не авторизована — CommandError «run telega-fs login».
     void connect();
     // Лимитер и TelegramStore для канала chat_id; open() проверяет доступ, автоудаление и права
-    // (SPEC 7.2 шаг 3, 12.3).
-    // read_only (--ro): учёт кэша чтения не пишется в state.sqlite (SPEC 7.2).
+    // (как при монтировании).
+    // read_only (--ro): учёт кэша чтения не пишется в state.sqlite.
     void open_store(int64_t chat_id, bool read_only = false);
-    // Сверка кэша чтения с таблицей read_cache и запуск его обслуживания (SPEC 8.2). Зовётся при
+    // Сверка кэша чтения с таблицей read_cache и запуск его обслуживания. Зовётся при
     // монтировании, когда state.sqlite уже открыт и приведён к текущей схеме.
     void start_read_cache();
 
@@ -62,7 +62,7 @@ class TelegramBackend {
     std::unique_ptr<store::TelegramStore> store_;
 };
 
-// Параметры лимитера и хранилища из профиля (SPEC 10.2, 12.2).
+// Параметры лимитера и хранилища из профиля.
 store::RateLimiterOptions limiter_options(const Profile& p);
 store::TelegramStoreOptions store_options(const Profile& p, int64_t chat_id);
 // Опции TelegramStore для монтирования (кэш чтения включён; в read_only без state_db).

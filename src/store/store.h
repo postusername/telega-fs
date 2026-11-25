@@ -1,10 +1,10 @@
 #pragma once
 
-// Узкий интерфейс хранилища сообщений канала (SPEC 3). Реализации: LocalDirStore (тесты,
-// эксперименты, отладка) и TelegramStore (M2).
+// Узкий интерфейс хранилища сообщений канала. Реализации: LocalDirStore (тесты,
+// эксперименты, отладка) и TelegramStore.
 //
 // Все вызовы блокирующие и потокобезопасные. Вызывать их при удерживаемой блокировке MetaStore
-// НЕ ДОПУСКАЕТСЯ (SPEC 9).
+// НЕ ДОПУСКАЕТСЯ.
 
 #include <array>
 #include <chrono>
@@ -29,12 +29,12 @@ struct ChunkRef {
 };
 
 inline constexpr size_t kHeadHeaderSize = 256;
-// Размер пачки getMessages и deleteMessages (SPEC 4, 7.4).
+// Размер пачки getMessages и deleteMessages.
 inline constexpr size_t kMessagesBatch = 100;
 
 struct HeadInfo {
     int64_t msg_id = 0;
-    // Первые 256 байт блоба (открытый заголовок, SPEC 6.3). Короче, если сообщение короче.
+    // Первые 256 байт блоба (открытый заголовок). Короче, если сообщение короче.
     Bytes header;
 };
 
@@ -62,8 +62,8 @@ class Store {
     virtual ~Store() = default;
 
     // true, если Store сам собирает из одновременных put_chunk альбомы (TelegramStore): тогда
-    // Vfs держит больше вызовов в полёте, чем реальных отправок (SPEC 8.1, «Параллельность
-    // загрузок»). Иначе одновременных put_chunk ровно upload_concurrency.
+    // Vfs держит больше вызовов в полёте, чем реальных отправок. Иначе одновременных put_chunk
+    // ровно upload_concurrency.
     [[nodiscard]] virtual bool gathers_albums() const noexcept { return false; }
 
     // Загрузить зашифрованный файл чанка как новое сообщение. Файл после возврата можно удалять.
@@ -71,11 +71,11 @@ class Store {
 
     // Прочитать [offset, offset + out.size()) сообщения. Выход за конец — permanent. Это
     // пользовательское чтение: TelegramStore исполняет его с приоритетом 32..17 по возрасту
-    // запроса (SPEC 10.2) и вытесняет им readahead.
+    // запроса и вытесняет им readahead.
     virtual void read_range(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out) = 0;
 
     // read_range с общим сроком вызывающего: тот, кто читает чанк в несколько обращений и с
-    // повторами (ChunkReader), держит один дедлайн read_timeout от постановки чтения (SPEC 8.2) и
+    // повторами (ChunkReader), держит один дедлайн read_timeout от постановки чтения и
     // передаёт остаток. Реализация не ждёт дольше until (transient по его истечении) и не начинает
     // повтор, если остатка не хватает. Реализация по умолчанию срок не знает и зовёт read_range.
     virtual void read_range_until(const ChunkRef& ref, uint64_t offset, std::span<std::byte> out,
@@ -84,10 +84,10 @@ class Store {
         read_range(ref, offset, out);
     }
 
-    // Подсказка readahead (SPEC 8.2): диапазон [offset, offset + len) сообщения скоро прочитают.
+    // Подсказка readahead: диапазон [offset, offset + len) сообщения скоро прочитают.
     // Не блокирует и ничего не возвращает: ошибки и недоступность сети подсказка глотает.
     // distance — расстояние в чанках файла от позиции чтения (0 — ближайший чанк), из него
-    // TelegramStore получает приоритет скачивания 16 − distance, но не ниже 1 (SPEC 10.2).
+    // TelegramStore получает приоритет скачивания 16 − distance, но не ниже 1.
     // Реализация по умолчанию ничего не делает.
     virtual void prefetch(const ChunkRef& ref, uint64_t offset, uint64_t len, uint32_t distance) {
         (void)ref;
@@ -99,8 +99,8 @@ class Store {
     // Удалить сообщения. Отсутствующие id не ошибка.
     virtual void delete_messages(std::span<const int64_t> msg_ids) = 0;
 
-    // Какие из сообщений существуют (fsck, SPEC 12.3): ответ по одному bool на каждый id, в том
-    // же порядке. TelegramStore делает один getMessages на вызов (до 100 id, SPEC 10.2, 4), поэтому
+    // Какие из сообщений существуют (fsck): ответ по одному bool на каждый id, в том
+    // же порядке. TelegramStore делает один getMessages на вызов (до 100 id), поэтому
     // вызывающий режет список пачками по kMessagesBatch. Реализация по умолчанию не умеет:
     // permanent-ошибка.
     virtual std::vector<bool> messages_exist(std::span<const int64_t> msg_ids) {
@@ -117,7 +117,7 @@ class Store {
     // Загрузить блоб индекса, вернуть msg_id.
     virtual int64_t put_index(const std::filesystem::path& blob) = 0;
 
-    // Закрепить new_msg_id (точка коммита, SPEC 7.1 шаг 6), затем открепить old_msg_id.
+    // Закрепить new_msg_id (точка коммита), затем открепить old_msg_id.
     // Если pin не удался — исключение, голова не изменилась. Ошибка unpin проглатывается
     // (пишется в лог): головой всё равно считается самое новое закреплённое.
     virtual void set_head(int64_t new_msg_id, std::optional<int64_t> old_msg_id) = 0;

@@ -10,7 +10,7 @@ MaintSession::MaintSession(const GlobalArgs& global)
     : global_(global), loaded_(load_profile(global)) {
     paths_ = meta::FsPaths{loaded_.paths.data_dir};
     ensure_profile_dirs(loaded_.paths);
-    // SPEC 12.1, 12.3: обслуживающая команда держит lock; при смонтированной ФС он занят.
+    // Обслуживающая команда держит lock; при смонтированной ФС он занят.
     lock_ = std::make_unique<ProfileLock>(loaded_.paths.lock());
 
     if (!loaded_.profile.keyfile.empty()) {

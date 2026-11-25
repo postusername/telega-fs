@@ -1,4 +1,4 @@
-// Монтирование (SPEC 7.2): каждая строка таблицы, разблокировка ключей, проверка цепочки
+// Монтирование: каждая строка таблицы, разблокировка ключей, проверка цепочки
 // (порча, перестановка, пропуск, подмена), сироты upload_journal, открытые удалённые inode.
 
 #include <gtest/gtest.h>
@@ -19,7 +19,7 @@ using test::CommitEnv;
 using test::normalized;
 
 // Store, который первые `hidden` вызовов read_head отвечает заданной старой головой (или 404),
-// как TDLib с кэшем ChannelFull сразу после init или размонтирования (SPEC 2).
+// как TDLib с кэшем ChannelFull сразу после init или размонтирования.
 class StaleReadStore final : public store::Store {
   public:
     StaleReadStore(store::Store& inner, int hidden, std::optional<store::HeadInfo> stale)
@@ -524,7 +524,7 @@ TEST_F(Mount, RolledBackHeadIsRefused) {
     EXPECT_EQ(mount(a_)->report().situation, MountSituation::same_generation);
 }
 
-// --- кэш TDLib: голова не видна сразу после init или размонтирования (SPEC 2, 7.2 шаг 4) ---
+// --- кэш TDLib: голова не видна сразу после init или размонтирования ---
 
 TEST_F(Mount, StaleEmptyHeadIsRetriedWhenTheLocalHeadIsKnown) {
     init();
@@ -579,7 +579,7 @@ TEST_F(Mount, StaleHeadThatNeverClearsFailsAfterTheWindow) {
         mount_fs(stale, a_, o);
         FAIL() << "mount did not fail";
     } catch (const MountError& e) {
-        // Локальный индекс есть: после окна это потеря головы (SPEC 7.2).
+        // Локальный индекс есть: после окна это потеря головы.
         EXPECT_EQ(e.kind(), MountErrorKind::head_lost);
     }
     EXPECT_GT(stale.head_reads(), 2);
@@ -616,7 +616,7 @@ TEST_F(Mount, EmptyChannelHasNoHead) {
     const MountError e = mount_error(b_);
     EXPECT_EQ(e.kind(), MountErrorKind::no_head);
     EXPECT_NE(std::string(e.what()).find("init"), std::string::npos);
-    // Поиска головы перебором истории в v1 нет (SPEC 7.2, issue #1): подсказки про него нет.
+    // Поиска головы перебором истории нет: подсказки про него нет.
     EXPECT_EQ(std::string(e.what()).find("recover --scan"), std::string::npos);
 }
 
@@ -626,7 +626,7 @@ TEST_F(Mount, HeadThatIsNotAnIndexBlobIsRefused) {
     write_file_atomic(file, Bytes(300, std::byte{0x42}));
     const auto ref = store_->put_chunk(file);
     set_pinned({ref.msg_id});
-    // С живым локальным индексом это потеря головы (SPEC 7.2), без него — подсказка про init.
+    // С живым локальным индексом это потеря головы, без него — подсказка про init.
     EXPECT_EQ(mount_error(a_).kind(), MountErrorKind::head_lost);
     EXPECT_EQ(mount_error(b_).kind(), MountErrorKind::not_index_blob);
 }
@@ -658,7 +658,7 @@ TEST_F(Mount, WrongPassphrase) {
 }
 
 // Параметры KDF из неаутентифицированного заголовка головы (машина без keyring) ограничены
-// пределами SENSITIVE (SPEC 11): подложенный заголовок не должен заставлять считать Argon2
+// пределами SENSITIVE: подложенный заголовок не должен заставлять считать Argon2
 // с произвольными параметрами. Отказ приходит до вычисления KDF.
 TEST_F(Mount, ForgedKdfLimitsInHeadHeaderAreRefused) {
     InitOptions o = init_options();
@@ -671,7 +671,7 @@ TEST_F(Mount, ForgedKdfLimitsInHeadHeaderAreRefused) {
     const auto plant = [&](uint64_t ops, uint64_t mem) {
         const auto file = msg_file(test::must(store_->read_head()).msg_id);
         Bytes blob = read_file(file);
-        constexpr size_t kOpsOffset = 97;  // kdf_opslimit, затем kdf_memlimit (SPEC 6.3)
+        constexpr size_t kOpsOffset = 97;  // kdf_opslimit, затем kdf_memlimit
         for (size_t i = 0; i < 8; ++i) {
             blob[kOpsOffset + i] = static_cast<std::byte>(ops >> (8 * i));
             blob[kOpsOffset + 8 + i] = static_cast<std::byte>(mem >> (8 * i));
@@ -706,7 +706,7 @@ TEST_F(Mount, KeyringOfAnotherFileSystemIsRefused) {
     EXPECT_EQ(mount_error(a_).kind(), MountErrorKind::foreign_fs);
 }
 
-// --- порча цепочки (SPEC 6.3: prev_hash и generation проверяются всегда) ---
+// --- порча цепочки (prev_hash и generation проверяются всегда) ---
 
 TEST_F(Mount, CorruptChainElementIsRefused) {
     const auto ids = make_chain_of_four();

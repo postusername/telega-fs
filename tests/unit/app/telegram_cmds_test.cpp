@@ -1,5 +1,5 @@
-// login, logout, init и mount для store = "telegram" на фейковом транспорте TDLib (SPEC 10.1,
-// 10.3, 11, 12.3). Сеть и настоящая TDLib не нужны.
+// login, logout, init и mount для store = "telegram" на фейковом транспорте TDLib. Сеть и настоящая
+// TDLib не нужны.
 
 #include "app/telegram_cmds.h"
 
@@ -297,7 +297,7 @@ TEST_F(TelegramCmds, BotLoginCreatesBareKeyringAndPassesTdlibParameters) {
     EXPECT_NE(out.find("lost for good"), std::string::npos);
     EXPECT_EQ(fs::status(data_dir()).permissions() & fs::perms::all, fs::perms::owner_all);
 
-    // setTdlibParameters (SPEC 10.1).
+    // setTdlibParameters.
     const Json p = account_->last("setTdlibParameters");
     EXPECT_EQ(p["database_directory"], (data_dir() / "tdlib").string());
     EXPECT_EQ(p["files_directory"], (cache_dir() / "tdfiles").string());
@@ -567,7 +567,7 @@ TEST_F(TelegramCmds, BackendOfAnAuthorizedSessionConnectsWithoutPrompts) {
     EXPECT_EQ(describe_account(backend.session().me()), "bot @somebody (id 4242)");
 }
 
-// SPEC 7.2: --ro ничего не меняет локально, в том числе учёт кэша чтения не пишется в state.sqlite:
+// --ro ничего не меняет локально, в том числе учёт кэша чтения не пишется в state.sqlite:
 // TelegramStore в --ro получает tdfiles_dir (учёт в памяти), но не state_db.
 TEST_F(TelegramCmds, ReadOnlyMountDoesNotGiveTheReadCacheAStateDatabase) {
     write_config("auth = \"bot\"\n");
@@ -703,7 +703,7 @@ TEST_F(TelegramInit, LocalProfileRejectsChatAndTitle) {
     EXPECT_NE(run_init_capturing({}, "T", 1).find("store = \"telegram\""), std::string::npos);
 }
 
-// Keyring с ФС, как после init, который упал между записью keyring и pin (SPEC 12.3).
+// Keyring с ФС, как после init, который упал между записью keyring и pin.
 void attach_fake_fs(const fs::path& data_dir, const fs::path& keyfile) {
     const crypto::KeyringFile k = crypto::load_keyring(data_dir / "keyring");
     const crypto::Key kek = crypto::read_keyfile(keyfile);
@@ -745,7 +745,7 @@ TEST_F(TelegramInit, ProfileIsInspectedOnlyUnderItsLock) {
 }
 
 // Прерванный init (keyring с ФС, базы нет или base_generation = 0) не блокирует профиль: init
-// идёт дальше, к Telegram, а решает судьба канала (SPEC 12.3).
+// идёт дальше, к Telegram, а решает судьба канала.
 TEST_F(TelegramInit, InterruptedInitIsNotRefusedUpFront) {
     write_config("auth = \"bot\"\n");
     login_bot();

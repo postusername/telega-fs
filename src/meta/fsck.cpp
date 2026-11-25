@@ -61,7 +61,7 @@ struct ChunkInfo {
     bool zero_mac = false;
     bool shape_ok = true;  // форма строки позволяет читать чанк из канала
     // На чанк ссылается хотя бы один экстент. Сообщение мёртвого чанка могли уже удалить, а его
-    // строка осталась в индексе канала (SPEC 6.6): это не порча, такие чанки не проверяются.
+    // строка осталась в индексе канала: это не порча, такие чанки не проверяются.
     bool live = true;
 };
 
@@ -368,7 +368,7 @@ struct VerifyResult {
     std::string why;
 };
 
-// Скачать чанк целиком и проверить заголовок и теги всех сегментов (SPEC 5).
+// Скачать чанк целиком и проверить заголовок и теги всех сегментов.
 VerifyResult verify_chunk(store::Store& store, const crypto::Key& k_data, const FsUuid& fs_uuid,
                           const ChunkInfo& chunk) {
     const store::ChunkRef ref{chunk.msg_id, chunk.remote_file_id};

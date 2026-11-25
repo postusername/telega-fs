@@ -1,13 +1,13 @@
 #pragma once
 
-// Overlay — незалитые данные и атрибуты (SPEC 6.4, 8.1): строки dirty_chunks и dirty_attrs
+// Overlay — незалитые данные и атрибуты: строки dirty_chunks и dirty_attrs
 // в state.sqlite, открытый текст грязных чанков в staging/<ino>-<idx> и их отражение в памяти
 // с расписанием загрузок.
 //
 // Каждое изменение сначала долговечно пишется в state.sqlite, затем отражается в памяти.
 // Согласованность записей одного inode с его staging-файлами обеспечивает вызывающий (Vfs):
 // меняющие методы зовутся под исключительной полосой inode, читающие — хотя бы под
-// разделяемой. Сами структуры в памяти — под std::shared_mutex (SPEC 9); StateStore
+// разделяемой. Сами структуры в памяти — под std::shared_mutex; StateStore
 // вызывается без него. Флаги расписания (queued, uploading, failed) меняются без полосы,
 // только под мьютексом Overlay.
 
@@ -48,7 +48,7 @@ struct DirtyView {
     int64_t last_write_ns = 0;
     // Наименьшая длина, до которой truncate обрезал позицию после начала текущей заливки
     // (INT64_MAX — не обрезал). Залитый снимок применяется не длиннее её: иначе хвост,
-    // обрезанный и снова расширенный, ожил бы в индексе (SPEC 6.2).
+    // обрезанный и снова расширенный, ожил бы в индексе.
     int64_t cut_len = INT64_MAX;
 };
 
@@ -58,7 +58,7 @@ struct ChunkWrite {
     int64_t idx = 0;
     uint64_t from = 0;
     uint64_t to = 0;
-    // Длина staging-файла позиции после этой записи (SPEC 8.3): Overlay запоминает её как
+    // Длина staging-файла позиции после этой записи: Overlay запоминает её как
     // учтённую. Место под рост уже занято вызывающим (StagingBudget).
     uint64_t file_len = 0;
 };
@@ -70,14 +70,14 @@ struct UploadTarget {
     int64_t version = 0;
 };
 
-// Объект пакета, чья заливка применена (SPEC 6.5).
+// Объект пакета, чья заливка применена.
 struct PackedObject {
     ChunkKey key;  // позиция 0 файла
     uint64_t incarnation = 0;
     int64_t version = 0;
 };
 
-// План запечатывания под давлением на staging (SPEC 8.1, 8.3).
+// План запечатывания под давлением на staging.
 struct PressurePlan {
     // Учтённые байты чанков, которые уже освобождаются сами: в очереди, в заливке, в пакете,
     // залитые (последние учитываются, когда пакет закрыт).
@@ -101,7 +101,7 @@ class Overlay {
     // Поднять записи из state.sqlite (при старте, до любых операций).
     void load();
 
-    // Учёт места staging (SPEC 8.3). Ставится до запуска потоков; без него Overlay места не
+    // Учёт места staging. Ставится до запуска потоков; без него Overlay места не
     // считает. Overlay возвращает место, когда убирает позицию или обрезает файл; рост
     // занимает вызывающий до записи (StagingBudget::try_acquire_user).
     void set_budget(StagingBudget* budget) { budget_ = budget; }
@@ -156,13 +156,13 @@ class Overlay {
     // транзакцией state.sqlite. persist = false — только в памяти (read-only монтирование не
     // меняет state.sqlite).
     void drop_position(const ChunkKey& key, bool clear_attrs, bool persist);
-    // Залитый чанк применён (SPEC 8.1 шаги 4–5): одной транзакцией state.sqlite удалить строку,
+    // Залитый чанк применён : одной транзакцией state.sqlite удалить строку,
     // если версия не изменилась (тогда и staging-файл), dirty_attrs, если clear_attrs,
     // и запись журнала загрузок. Иначе запомнить, что версия version залита.
     void finish_upload(const ChunkKey& key, uint64_t incarnation, int64_t version, bool clear_attrs,
                        int64_t chunk_id);
 
-    // --- пакеты (SPEC 6.5) ---
+    // --- пакеты ---
 
     // Позиция запечатана в открытый пакет на версии version: таймер её не трогает, пока
     // version не изменилась. false — у чанка постоянная ошибка той же версии, а запрос не
@@ -173,7 +173,7 @@ class Overlay {
     // Пакет не удался постоянной ошибкой: ожидающие fsync получают EIO, таймер позицию не берёт,
     // пока её не запечатают явно.
     void mark_failed(const ChunkKey& key, uint64_t incarnation, int64_t version);
-    // Пакет применён к индексу (SPEC 6.5): одной транзакцией state.sqlite для каждого объекта
+    // Пакет применён к индексу: одной транзакцией state.sqlite для каждого объекта
     // удалить строку dirty_chunks (при той же version), dirty_attrs и строку open_pack, затем
     // запись журнала загрузок. Файлы staging удаляются, ожидающие просыпаются.
     void finish_pack(int64_t chunk_id, std::span<const PackedObject> applied);
@@ -194,7 +194,7 @@ class Overlay {
     // Ключи чанков, которые пора запечатать по таймеру: не в очереди, не заливаются, без
     // постоянной ошибки текущей версии и с последней записью не позже deadline_ns.
     [[nodiscard]] std::vector<ChunkKey> expired(int64_t deadline_ns) const;
-    // Позиция ждёт, пока позиция 0 инлайн-файла не уйдёт из overlay (SPEC 6.2: у инлайн-файла
+    // Позиция ждёт, пока позиция 0 инлайн-файла не уйдёт из overlay (у инлайн-файла
     // нет экстентов, поэтому экстент idx ≥ 1 нельзя применять раньше позиции 0). Помеченную
     // позицию таймер не берёт; take_blocked снимает пометки inode и возвращает ключи.
     void set_blocked(const ChunkKey& key, uint64_t incarnation);
@@ -230,7 +230,7 @@ class Overlay {
         int64_t cut_len = INT64_MAX;
         // Версия, запечатанная в открытый пакет (0 — не в пакете). Только в памяти.
         int64_t packed_version = 0;
-        // Длина staging-файла, учтённая в StagingBudget (SPEC 8.3).
+        // Длина staging-файла, учтённая в StagingBudget.
         uint64_t staged = 0;
     };
     enum class TargetState : uint8_t { pending, done, failed };

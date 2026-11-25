@@ -19,10 +19,10 @@
 
 // Устройство LocalDirStore.
 //
-// Раскладка каталога (SPEC 3): next_id — следующий msg_id текстом, msgs/<msg_id> — сообщения,
+// Раскладка каталога: next_id — следующий msg_id текстом, msgs/<msg_id> — сообщения,
 // pinned — закреплённые msg_id по одному в строке. Состояние не кэшируется в памяти: каждый вызов
 // читает next_id и pinned с диска, поэтому новый экземпляр (или перезапущенный процесс) видит всё,
-// что записал прежний. Межпроцессной блокировки нет: писатель один (SPEC 12).
+// что записал прежний. Межпроцессной блокировки нет: писатель один.
 //
 // mu_ сериализует изменения next_id и pinned и защищает правила сбоев и счётчики. Копирование
 // содержимого в msgs/, чтение диапазонов и блобов индекса и задержки выполняются без mu_:
@@ -670,12 +670,12 @@ void LocalDirStore::set_head(int64_t new_msg_id, std::optional<int64_t> old_msg_
         auto pins = load_pinned_locked();
         if (!std::binary_search(pins.begin(), pins.end(), new_msg_id)) {
             pins.insert(std::upper_bound(pins.begin(), pins.end(), new_msg_id), new_msg_id);
-            save_pinned_locked(pins);  // точка коммита (SPEC 7.1 шаг 6)
+            save_pinned_locked(pins);  // точка коммита
         }
         if (!old_msg_id || *old_msg_id == new_msg_id) {
             return;
         }
-        // SPEC 7.1 шаг 7: неудачный unpin не ошибка, головой остаётся самое новое закреплённое.
+        // Неудачный unpin не ошибка, головой остаётся самое новое закреплённое.
         try {
             const auto it = std::lower_bound(pins.begin(), pins.end(), *old_msg_id);
             if (it != pins.end() && *it == *old_msg_id) {

@@ -1,6 +1,6 @@
 #pragma once
 
-// Итог отправки сообщения (SPEC 2, 10.1). sendMessage сразу возвращает временное сообщение, а
+// Итог отправки сообщения. sendMessage сразу возвращает временное сообщение, а
 // результат приходит апдейтом updateMessageSendSucceeded / updateMessageSendFailed с
 // old_message_id = id временного сообщения. Без разбора этих апдейтов операция зависла бы
 // навсегда. Нужен и TelegramStore, и бенчу.

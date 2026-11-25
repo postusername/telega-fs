@@ -1,4 +1,4 @@
-// crypto/keyring: локальный keyring (SPEC 11).
+// crypto/keyring: локальный keyring.
 
 #include "crypto/keyring.h"
 
@@ -209,7 +209,7 @@ TEST_F(KeyringTest, CorruptedFileOnDisk) {
     }
 }
 
-// --- keyring без ФС (SPEC 11, «Keyring до init») ---
+// --- keyring без ФС ---
 
 TEST_F(KeyringTest, WithoutFsHasZeroFsFieldsAndRealTdlibKey) {
     const KdfParams kdf = fast_params();

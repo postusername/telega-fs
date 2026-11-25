@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Уязвимость
+    url: https://github.com/postusername/telega-fs/security/advisories/new
+    about: Сообщайте приватно, не в публичном issue.

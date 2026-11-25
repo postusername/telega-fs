@@ -1,7 +1,7 @@
 #pragma once
 
 // Внутренние помощники модуля crypto: приведение указателей для libsodium и общий
-// формат параметров KDF в заголовке блоба индекса (SPEC 6.3) и в keyring (SPEC 11).
+// формат параметров KDF в заголовке блоба индекса и в keyring.
 // Вне src/crypto не используется.
 
 #include <algorithm>
@@ -34,7 +34,7 @@ inline bool all_zero(ByteSpan data) noexcept {
 }
 
 // Разобрать kdf_alg и блок limits. Неизвестный алгоритм или ненулевые параметры у keyfile —
-// CorruptError (SPEC 6.3: при kdf_alg = 0 opslimit, memlimit и salt нулевые).
+// CorruptError (при kdf_alg = 0 opslimit, memlimit и salt должны быть нулевыми).
 inline KdfParams parse_kdf(uint8_t alg, ByteSpan limits) {
     KdfParams kdf;
     if (alg == static_cast<uint8_t>(KdfAlg::keyfile)) {

@@ -423,7 +423,7 @@ TEST_F(VfsData, RestartRepairsHalfAppliedState) {
     env.state->set_dirty_attrs(meta::DirtyAttrs{4242, 10, 1});
     { const Fd stray = Fd::open(env.staging() / "4242-0", O_WRONLY | O_CREAT, 0600); }
     env.restart();
-    // Атрибуты перенесены в индекс, экстенты за размером обрезаны (SPEC 6.2).
+    // Атрибуты перенесены в индекс, экстенты за размером обрезаны.
     EXPECT_EQ(env.must_inode(f).size, kChunk + 10);
     EXPECT_EQ(env.must_inode(f).mtime_ns, 9'000'000'000);
     const auto exts = env.extents(f);
@@ -436,7 +436,7 @@ TEST_F(VfsData, RestartRepairsHalfAppliedState) {
     EXPECT_TRUE(env.accounting_ok());
 }
 
-// --- классы хранения (SPEC 6.5) ---
+// --- классы хранения ---
 
 TEST_F(VfsData, SmallFileBecomesInline) {
     const int64_t f = env.mkfile("f");
@@ -605,7 +605,7 @@ TEST_F(VfsData, EmptyStagingFileKeepsCommittedData) {
 }
 
 // N1: у инлайн-файла с непустым inline_data записаны позиции 0 и 1, а staging позиции 0 после
-// сбоя пропал или пуст. Позиция 0 заново создаётся из inline_data (SPEC 8.1): иначе позиция 1
+// сбоя пропал или пуст. Позиция 0 заново создаётся из inline_data: иначе позиция 1
 // застревает навсегда (inline_conflict), а fsync вечно даёт EIO.
 class VfsInlineFarWriteLoss : public VfsData {
   protected:

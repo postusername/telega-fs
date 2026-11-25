@@ -1,6 +1,6 @@
 #pragma once
 
-// Блоб индекса: открытый заголовок 256 байт и зашифрованное тело (SPEC 6.3).
+// Блоб индекса: открытый заголовок 256 байт и зашифрованное тело.
 // Здесь только формат и шифрование. Тело (zstd от снимка или от chain || patchset)
 // собирает и разбирает CommitManager.
 
@@ -54,7 +54,7 @@ struct OpenedBlob {
 // Любое расхождение — CorruptError.
 OpenedBlob open_index_blob(const Key& k_index, ByteSpan blob);
 
-// zstd (SPEC 6.3, 7.1): уровень 9 для снимка, 3 для дельты.
+// zstd: уровень 9 для снимка, 3 для дельты.
 Bytes zstd_compress(ByteSpan data, int level);
 // Ошибка распаковки — CorruptError. max_size — защита от бомбы (по умолчанию 16 ГиБ).
 Bytes zstd_decompress(ByteSpan data, uint64_t max_size = uint64_t{16} << 30U);

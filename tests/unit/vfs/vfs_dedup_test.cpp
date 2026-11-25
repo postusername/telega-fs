@@ -1,8 +1,8 @@
-// Дедупликация позиционных чанков (SPEC 8.1, шаг 2) на LocalDirStore: повторная запись того же
+// Дедупликация позиционных чанков на LocalDirStore: повторная запись того же
 // содержимого не заливает ничего нового, refcount растёт и падает вместе с экстентами, чанк с
 // refcount = 0 не находится и не оживает, пакеты и инлайн не дедуплицируются, нулевой content_mac
 // не находится, RMW и truncate возвращаются к тому же чанку, сбой между транзакциями индекса и
-// state.sqlite не портит refcount. Совместная работа с отложенной уборкой (SPEC 7.4) —
+// state.sqlite не портит refcount. Совместная работа с отложенной уборкой —
 // dedup_commit_test.cpp.
 
 #include <fcntl.h>
@@ -138,7 +138,7 @@ TEST_F(VfsDedup, RemovingOneCopyLeavesTheOtherReadable) {
     EXPECT_TRUE(env.accounting_ok());
 }
 
-// Мёртвый чанк (refcount = 0) не переиспользуется (SPEC 8.1, шаг 2): уборка могла удалить его
+// Мёртвый чанк (refcount = 0) не переиспользуется: уборка могла удалить его
 // сообщение, а строка остаться в индексе канала. Запись того же содержимого заливается заново.
 TEST_F(VfsDedup, DeadChunkIsNotReused) {
     const Bytes data = pattern(kBig, 4);
@@ -275,7 +275,7 @@ TEST_F(VfsDedup, ZeroContentMacIsNeverFound) {
     const Bytes data = pattern(kBig, 7);
     const int64_t a = put("a", data);
     const int64_t id = chunk_of(a);
-    // Как fsck --repair (SPEC 12.3): битому чанку обнуляется content_mac.
+    // Как fsck --repair: битому чанку обнуляется content_mac.
     env.meta->write([&](meta::Db& db) {
         meta::Stmt st{db, "UPDATE chunks SET content_mac = zeroblob(32) WHERE chunk_id = ?"};
         st.bind(1, id).run();

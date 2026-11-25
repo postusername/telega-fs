@@ -16,7 +16,7 @@ namespace telega::bench::run {
 
 namespace {
 
-constexpr int64_t kMaxFloodWaitSeconds = 3600;  // SPEC 17.2: больше часа — остановиться
+constexpr int64_t kMaxFloodWaitSeconds = 3600;  // больше часа — остановиться
 
 std::atomic<bool> g_stop{false};
 

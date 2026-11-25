@@ -1,6 +1,6 @@
 #pragma once
 
-// Протокол управляющего сокета (SPEC 12.4): одна JSON-строка запроса, одна JSON-строка ответа.
+// Протокол управляющего сокета: одна JSON-строка запроса, одна JSON-строка ответа.
 //
 //   запрос:  {"proto": 1, "cmd": "<имя>", "args": {...}}
 //   успех:   {"proto": 1, "ok": true,  "result": {...}}
@@ -22,12 +22,12 @@ inline constexpr int kProtoVersion = 1;
 // Больше этого размера строка запроса не принимается (в запросах v1 нет ничего крупного).
 inline constexpr size_t kMaxLineBytes = size_t{64} * 1024;
 
-// Коды ошибок ответа (SPEC 12.4 фиксирует только `unsupported`; остальные — наши).
+// Коды ошибок ответа (протокол фиксирует только `unsupported`; остальные — наши).
 namespace code {
 inline constexpr std::string_view unsupported = "unsupported";  // версия протокола или команда
 inline constexpr std::string_view bad_request = "bad_request";  // не JSON или неверная форма
 inline constexpr std::string_view read_only = "read_only";  // ФС в read-only, коммит невозможен
-inline constexpr std::string_view io = "io";  // заливка или коммит не удались (EIO, SPEC 7.3)
+inline constexpr std::string_view io = "io";  // заливка или коммит не удались (EIO)
 inline constexpr std::string_view shutting_down = "shutting_down";  // идёт размонтирование
 inline constexpr std::string_view busy = "busy";  // слишком много клиентов
 inline constexpr std::string_view internal = "internal";

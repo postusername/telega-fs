@@ -1,5 +1,5 @@
-// Проверки своей сборки SQLite (SPEC 15.2): флаги компиляции и session extension,
-// на которых построен дельта-журнал (SPEC 6.6).
+// Проверки своей сборки SQLite: флаги компиляции и session extension,
+// на которых построен дельта-журнал.
 
 #include <gtest/gtest.h>
 #include <sqlite3.h>
@@ -113,7 +113,7 @@ constexpr const char* kSchema = "CREATE TABLE t (id INTEGER PRIMARY KEY, name TE
 constexpr const char* kSeed = "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')";
 
 // Две одинаковые базы с исходными строками, созданными до начала сессии: так патч содержит
-// настоящие UPDATE и DELETE по существующим строкам, как в дельта-журнале (SPEC 6.6).
+// настоящие UPDATE и DELETE по существующим строкам, как в дельта-журнале.
 class SqliteSession : public ::testing::Test {
   protected:
     void SetUp() override {
@@ -152,7 +152,7 @@ TEST_F(SqliteSession, PatchsetRoundTrip) {
 }
 
 TEST_F(SqliteSession, ChangegroupConcatenatesPatchsets) {
-    // Два патча подряд, как pending_patchsets после неудавшегося коммита (SPEC 6.6).
+    // Два патча подряд, как pending_patchsets после неудавшегося коммита.
     SessionPtr session = start_session(live.get());
     ASSERT_TRUE(exec(live.get(), "UPDATE t SET name = 'aa' WHERE id = 1"));
     ASSERT_TRUE(exec(live.get(), "INSERT INTO t VALUES (4, 'd')"));

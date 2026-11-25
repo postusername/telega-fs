@@ -1,6 +1,6 @@
 #pragma once
 
-// Общий код подкоманд экспериментов E2 и E4 (SPEC 17.5, 17.7): CSV, статистика, ожидание
+// Общий код подкоманд экспериментов E2 и E4: CSV, статистика, ожидание
 // FLOOD_WAIT, детерминированные данные, состояние эксперимента в state-dir. Секреты не
 // печатаются, id каналов и пользователей уходят только в state-dir, а не в отчёты.
 
@@ -26,7 +26,7 @@ using ExpClock = std::chrono::steady_clock;
     return std::chrono::duration<double, std::milli>(ExpClock::now() - t0).count();
 }
 
-// Серия остановлена: FLOOD_WAIT дольше часа или бот заблокирован (SPEC 17.2). Решение о
+// Серия остановлена: FLOOD_WAIT дольше часа или бот заблокирован. Решение о
 // продолжении принимает пользователь.
 class StopExperiment : public std::runtime_error {
   public:
@@ -107,7 +107,7 @@ void write_seeded_file(const std::filesystem::path& path, uint64_t seed, uint64_
 [[nodiscard]] std::string base64_decode(const std::string& text);
 [[nodiscard]] std::string random_hex(size_t digits);  // не секрет: имя документа
 
-// Минимальный интервал между отправками сообщений ботом (SPEC 17.2, не больше 20 в минуту).
+// Минимальный интервал между отправками сообщений ботом (не больше 20 в минуту).
 class SendPacer {
   public:
     explicit SendPacer(std::chrono::milliseconds interval) : interval_(interval) {}
@@ -159,7 +159,7 @@ std::optional<double> wait_chat_known(td::TdClient& client, int64_t chat_id,
 std::filesystem::path fresh_bot_dir(const BenchOptions& options);
 void remove_fresh_bot_dir(const std::filesystem::path& dir);
 
-// Запрос отправки документа по SPEC 4: <16 hex>.bin, disable_content_type_detection,
+// Запрос отправки документа как в telega-fs: <16 hex>.bin, disable_content_type_detection,
 // disable_notification, без подписи. Файл уже лежит под нужным именем.
 td::Json send_document_request(int64_t chat_id, const std::filesystem::path& file);
 

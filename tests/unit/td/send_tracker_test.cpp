@@ -1,4 +1,4 @@
-// SendTracker: итог sendMessage приходит апдейтом по (chat_id, old_message_id) (SPEC 2, 10.1).
+// SendTracker: итог sendMessage приходит апдейтом по (chat_id, old_message_id).
 
 #include "td/send_tracker.h"
 

@@ -1,4 +1,4 @@
-# Интеграционные тесты (SPEC 14).
+# Интеграционные тесты: настоящий бинарник и FUSE.
 
 # fsx: библиотека отдельно, чтобы её могли вызывать GoogleTest-обёртки FUSE-тестов.
 add_library(tgfs_fsx STATIC fsx/fsx_lib.cpp)
@@ -17,8 +17,8 @@ foreach(mode small large determinism resume detects usage)
 endforeach()
 
 # FUSE-тесты: настоящий бинарник telega-fs на LocalDirStore во временном каталоге. Без
-# /dev/fuse и fusermount3 пропускаются через GTEST_SKIP (SPEC 14). Бинарник линкуется с TDLib,
-# сам тестовый исполняемый файл — нет.
+# /dev/fuse и fusermount3 пропускаются через GTEST_SKIP. Бинарник линкуется с TDLib
+# (если она включена), сам тестовый исполняемый файл — нет.
 add_executable(telega_integration_tests
     harness.cpp
     fuse_test.cpp
@@ -31,13 +31,13 @@ add_executable(telega_integration_tests
 target_link_libraries(telega_integration_tests PRIVATE
     tgfs_fsx telega_store telega_crypto telega_options nlohmann_json::nlohmann_json
     GTest::gtest_main)
-# Тяжёлые данные приёмки M3 — в каталоге сборки (на большом диске), а не в /tmp.
+# Тяжёлые данные тестов ресурсов — в каталоге сборки (на большом диске), а не в /tmp.
 target_compile_definitions(telega_integration_tests PRIVATE
     TELEGA_FS_BINARY="$<TARGET_FILE:telega-fs>"
     TELEGA_IT_HEAVY_DIR="${CMAKE_BINARY_DIR}/it-tmp")
 add_dependencies(telega_integration_tests telega-fs)
 
-# Длинные прогоны (fsx и приёмка M3 на 10 ГиБ) — метка long и большой таймаут. Остальное идёт в
+# Длинные прогоны (fsx и тест ресурсов на 10 ГиБ) — метка long и большой таймаут. Остальное идёт в
 # обычном ctest.
 gtest_discover_tests(telega_integration_tests
     TEST_FILTER "-FuseFsxLong.*:ResourcesLong.*"

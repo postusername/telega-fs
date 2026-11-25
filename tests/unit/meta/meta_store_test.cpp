@@ -112,7 +112,7 @@ TEST_F(MetaStoreTest, FailedWriteRollsBackAndKeepsSessionClean) {
 TEST_F(MetaStoreTest, NestingRules) {
     EXPECT_THROW(store_->write([&](Db&) { store_->write([](Db&) {}); }), std::logic_error);
     EXPECT_THROW(store_->write([&](Db&) { (void)store_->take_patchset(); }), std::logic_error);
-    // with_lock допускает запись и забор патча внутри (CommitManager, SPEC 7.1 шаги 2 и 8).
+    // with_lock допускает запись и забор патча внутри (CommitManager).
     const bool dirty = store_->with_lock([&] {
         create_file("a");
         const bool was_dirty = store_->dirty_since_take();
@@ -195,7 +195,7 @@ TEST_F(MetaStoreTest, ReadersInParallelWithWriter) {
     store_->read([&](Db& db) { EXPECT_EQ(count_children(db, kRootIno), kFiles); });
 }
 
-// Замер забора патча под блокировкой на заметной нагрузке (для E1, SPEC 17.4): 20 000 новых
+// Замер забора патча под блокировкой на заметной нагрузке (для E1): 20 000 новых
 // файлов, переименование каталога и правка атрибутов.
 TEST_F(MetaStoreTest, TakePatchsetTiming) {
     constexpr int kFiles = 20'000;
@@ -241,7 +241,7 @@ TEST_F(MetaStoreTest, TakePatchsetTiming) {
         static_cast<long long>(us(empty_stats)));
 }
 
-// --- счётчик строк для промежуточного забора (SPEC 6.6) ---
+// --- счётчик строк для промежуточного забора ---
 
 TEST_F(MetaStoreTest, RowsSinceTakeCountsCommittedRowsAndResetsOnTake) {
     EXPECT_EQ(store_->rows_since_take(), 0);

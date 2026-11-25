@@ -1,4 +1,4 @@
-// tgfs-sim: офлайн-симуляция пакетов мелких файлов (SPEC 17.2, 17.12, эксперимент E9).
+// tgfs-sim: офлайн-симуляция пакетов мелких файлов (эксперимент E9).
 // Методика и результаты — docs/experiments/09-e9-packs.md.
 
 #include <CLI/CLI.hpp>
@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
     uint64_t seed_base = 20261121;
     Params base;
 
-    CLI::App app{"tgfs-sim: offline model of small-file packs (SPEC 17.12)"};
+    CLI::App app{"tgfs-sim: offline model of small-file packs"};
     app.add_option("--events", events, "CSV step,op,id,size (tools/bench/corpora/c1*.csv)");
     app.add_option("--hist", hist, "CSV size,count (tools/bench/corpora/c2-sizes.csv)");
     app.add_option("--dataset", dataset, "label for the dataset column")->required();
@@ -81,10 +81,10 @@ int main(int argc, char** argv) {
     app.add_option("--ages", ages, "pack_max_age list, seconds");
     app.add_option("--inline-max", inline_maxes, "inline_max list");
     app.add_option("--inline-budget", inline_budget, "inline_budget");
-    app.add_option("--limits", limits, "on | off | both (SPEC 10.2 token buckets)");
+    app.add_option("--limits", limits, "on | off | both (token buckets)");
     app.add_flag("--baselines", baselines,
                  "add baselines: no packs (inline as configured) and no packs, no inline");
-    app.add_option("--seeds", seeds, "repeats with different seeds (>= 3, SPEC 17.2)");
+    app.add_option("--seeds", seeds, "repeats with different seeds (>= 3)");
     app.add_option("--seed-base", seed_base, "seed of run k is seed-base + k");
     app.add_option("--files-per-s", files_per_s, "writer: files created per second, list");
     app.add_option("--write-mib-s", base.write_mib_per_s, "writer: data MiB per second");
@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
     app.add_option("--commit-interval", base.commit_interval_s, "seconds");
     app.add_option("--commit-defer", base.commit_defer_factor,
                    "defer the timer commit while uploads are queued, up to this many commit "
-                   "intervals (SPEC 7.1: 5); 0 - no deferral");
+                   "intervals (default 5); 0 - no deferral");
     app.add_option("--send-rate", base.send_rate_per_min, "actions per minute");
     app.add_option("--send-bytes-mib", send_bytes_mib, "bytes per minute, MiB");
     CLI11_PARSE(app, argc, argv);
@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (seeds < 3) {
-        std::cerr << "seeds must be >= 3 (SPEC 17.2)\n";
+        std::cerr << "seeds must be >= 3\n";
         return 2;
     }
     base.send_bytes_per_min = send_bytes_mib * sim::kMiB;

@@ -1,4 +1,4 @@
-// RateLimiter: два бакета, пауза FLOOD_WAIT, deadline, stop (SPEC 10.2).
+// RateLimiter: два бакета, пауза FLOOD_WAIT, deadline, stop.
 
 #include "store/rate_limiter.h"
 

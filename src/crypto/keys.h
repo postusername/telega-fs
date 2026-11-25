@@ -1,6 +1,6 @@
 #pragma once
 
-// Ключи и их обёртка (SPEC 11).
+// Ключи и их обёртка.
 
 #include <array>
 #include <cstddef>
@@ -15,7 +15,7 @@
 namespace telega::crypto {
 
 // Порча или подмена данных: ошибка проверки тега, неверный magic, несогласованные поля.
-// Наверху превращается в EIO (SPEC 5) или в отказ монтирования (SPEC 6.6, 7.2).
+// Наверху превращается в EIO или в отказ монтирования.
 class CorruptError : public std::runtime_error {
   public:
     using std::runtime_error::runtime_error;
@@ -47,9 +47,9 @@ class Key {
 
 // Подключи из master_key: crypto_kdf_derive_from_key, контекст "TGFS_KDF".
 struct SubKeys {
-    Key data;   // id 1, K_data — чанки (SPEC 5)
-    Key index;  // id 2, K_index — блобы индекса (SPEC 6.3)
-    Key mac;    // id 3, K_mac — content_mac (SPEC 6.2)
+    Key data;   // id 1, K_data — чанки
+    Key index;  // id 2, K_index — блобы индекса
+    Key mac;    // id 3, K_mac — content_mac
 };
 SubKeys derive_subkeys(const Key& master);
 
@@ -69,7 +69,7 @@ struct KdfParams {
     bool operator==(const KdfParams&) const = default;
 };
 
-// Параметры для пароля: случайная соль, OPSLIMIT_MODERATE и MEMLIMIT_MODERATE (SPEC 11).
+// Параметры для пароля: случайная соль, OPSLIMIT_MODERATE и MEMLIMIT_MODERATE.
 // Тесты могут передать свои (MIN), чтобы не тратить 256 МиБ и секунды.
 KdfParams passphrase_kdf_params();
 KdfParams passphrase_kdf_params(uint64_t opslimit, uint64_t memlimit);
@@ -81,7 +81,7 @@ Key derive_kek(std::string_view passphrase, const KdfParams& params);
 // KEK из keyfile: файл ровно из 32 байт, иначе std::runtime_error без содержимого файла.
 Key read_keyfile(const std::filesystem::path& path);
 
-// secretbox(KEK): nonce(24) || mac(16) || key(32) (SPEC 6.3, 11).
+// secretbox(KEK): nonce(24) || mac(16) || key(32).
 using WrappedKey = std::array<std::byte, 72>;
 WrappedKey wrap_key(const Key& kek, const Key& key);
 // nullopt — неверный KEK или порча (их не различить).
@@ -89,10 +89,10 @@ std::optional<Key> unwrap_key(const Key& kek, const WrappedKey& wrapped);
 
 // BLAKE2b-256.
 using Hash32 = std::array<std::byte, 32>;
-Hash32 blake2b256(ByteSpan data);  // без ключа: prev_hash, head_hash (SPEC 6.3)
+Hash32 blake2b256(ByteSpan data);  // без ключа: prev_hash, head_hash
 Hash32 blake2b256_keyed(const Key& key, ByteSpan data);
 
-// content_mac (SPEC 6.2): BLAKE2b-256 с ключом K_mac от size байт файла fd начиная с 0,
+// content_mac: BLAKE2b-256 с ключом K_mac от size байт файла fd начиная с 0,
 // читается потоково. Если файл короче size, недостающее считается нулями.
 Hash32 content_mac(const Key& k_mac, int fd, uint64_t size);
 

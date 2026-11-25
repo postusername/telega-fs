@@ -1,43 +1,83 @@
 #!/usr/bin/env bash
-# E2E telega-fs на живом Telegram в режиме бота (SPEC 14). Запускается вручную, не на каждый push.
+# Базовый E2E telega-fs на живом Telegram в режиме бота. Запускается вручную, не на каждый push.
 #
-#   tests/e2e/e2e_bot.sh                                  # из корня репозитория, бинарники из build/w-e2e
-#   TGFS_BIN=... BENCH_BIN=... tests/e2e/e2e_bot.sh
-#   cmake -B build/w-e2e -DTELEGA_FS_BUILD_TOOLS=ON -DTELEGA_FS_E2E=ON ... &&
-#     TELEGA_FS_E2E_RUN=1 ctest --test-dir build/w-e2e -L e2e --output-on-failure
+# Что проверяет: полный путь данных через настоящий канал. Запись на смонтированную ФС (200 МиБ
+# случайных данных, инлайн-файлы, пакеты мелких файлов, каталоги), fsync, повторный fsync сразу за
+# первым (повтор записи головы при конфликте), чтение только что залитого файла в том же процессе,
+# размонтирование с финальным коммитом, повторное монтирование, остановку демона по SIGTERM,
+# чтение всего с «другой машины» (пустые каталоги, пустой кэш, тот же канал) со сверкой sha256,
+# logout и повторный login. В конце проверяет, что документы в канале называются <16 hex>.bin или
+# <16 hex>.idx и подписей нет, а секреты (токен бота, api_hash) не попали в логи.
 #
-# Что делает (SPEC 14, 17.2):
-#   1. tgfs-bench e2e setup: пользователь создаёт приватный канал и добавляет бота администратором
-#      (post, edit, delete). Больше пользователь ничего не делает (0 сообщений).
-#   2. Машина A (изолированные XDG-каталоги): login --bot, init --chat, mount, запись 200 МиБ
-#      случайных данных и мелких файлов (инлайн, пакеты, каталоги), fsync, второй fsync сразу
-#      после первого (CAS-повтор), размонтирование.
-#   3. A ещё раз: повторное монтирование, сверка, запись файла без fsync и размонтирование по
-#      SIGTERM (финальный коммит).
-#   4. Машина B (пустые каталоги, тот же config.toml): login --bot заново (keyring без ФС),
-#      mount (master_key из головы), чтение всего с пустым кэшем, сверка sha256.
-#   5. A: logout, login, mount, сверка.
-#   6. tgfs-bench e2e inspect: документы в канале называются <16 hex>.bin|.idx, подписей нет.
-#   7. tgfs-bench e2e teardown (если не E2E_KEEP_CHANNEL=1).
+# Что нужно:
+#   - собранные telega-fs и tgfs-bench (сборка с -DTELEGA_FS_BUILD_TOOLS=ON); по умолчанию
+#     build/dev/src/telega-fs и build/dev/tools/bench/tdbench/tgfs-bench, иначе TGFS_BIN и BENCH_BIN;
+#   - fusermount3 (FUSE), python3, sha256sum;
+#   - креды Telegram: файл E2E_CREDS (по умолчанию cred.secret в корне репозитория, строки
+#     api-id=..., api-hash=..., bot-token=...) либо переменные TELEGA_API_ID, TELEGA_API_HASH,
+#     TELEGA_BOT_TOKEN. Секреты не печатаются;
+#   - канал. Два варианта:
+#       E2E_CHAT_ID=-100... (рекомендуется): ваш готовый приватный канал, где бот администратор
+#         с правами публиковать, редактировать и удалять сообщения. Аккаунт пользователя не нужен,
+#         канал не создаётся и не удаляется. Канал должен быть пустым (без закрепа и документов):
+#         иначе скрипт откажется работать, чтобы не затереть чужую ФС (E2E_WIPE_FIRST=1 разрешает
+#         боту убрать документы telega-fs и закреп головы). Проверка занимает около 1-2 минут и
+#         растёт с числом сообщений: закреп ждётся до минуты, затем бот отправляет и удаляет
+#         текст-зонд (его id задаёт верхнюю границу) и перебирает id 1..зонд пачками по 100 с
+#         паузой 10 с. В конце бот останавливает демоны (SIGKILL, если они
+#         не вышли за 20 с) и удаляет свои сообщения в канале, затем повторно проверяет пустоту:
+#         если канал не пуст, предупреждение и код выхода 1 (E2E_KEEP_CHANNEL=1 оставляет всё как
+#         есть). Если закреплено что-то кроме головы telega-fs, уборка отказывает;
+#       без E2E_CHAT_ID: канал создаёт и удаляет аккаунт пользователя в tgfs-bench
+#         (`tgfs-bench e2e setup|teardown`, вход пользователя: `tgfs-bench --qr login`,
+#         см. tools/bench). Это только настройка канала, ни одного сообщения с этого аккаунта.
 #
-# Креды: файл E2E_CREDS (по умолчанию cred.secret в корне репозитория; ключи api-id, api-hash,
-# bot-token) или переменные TELEGA_API_ID, TELEGA_API_HASH, TELEGA_BOT_TOKEN. Секреты не
-# печатаются. Все данные прогона лежат в E2E_WORK (по умолчанию mktemp в $TMPDIR), id канала —
-# в E2E_CHAT_FILE (вне репозитория). Репозиторий скрипт не меняет.
+# Время и трафик: около 15 минут, около 0,5 ГиБ исходящего (200 МиБ заливки плюс чтение с «машины
+# B» около 200 МиБ) и столько же входящего. Монтирование после init ждёт до 90 с, пока кэш TDLib
+# покажет голову канала (бот видит свежую голову с задержкой до минуты), а заливка упирается в
+# ограничение скорости отправки.
 #
-# Переменные: TGFS_BIN, BENCH_BIN, E2E_CREDS, E2E_WORK, E2E_CHAT_FILE, E2E_SIZE_MIB (200),
-# E2E_KEEP_CHANNEL=1 (не удалять канал), E2E_KEEP_SESSIONS=1 (не делать logout A и B в конце),
-# E2E_REUSE_CHANNEL=1 (канал уже создан, E2E_CHAT_FILE существует; на нём не должно быть
-# закреплённых сообщений), E2E_SYNC_TIMEOUT (sync_timeout в config.toml, по умолчанию 600s),
-# E2E_BENCH_ARGS (дополнительные глобальные опции tgfs-bench, например --state-dir).
+# Запуск:
+#   E2E_CHAT_ID=-1001234567890 tests/e2e/e2e_basic.sh     # из корня репозитория
+#   tests/e2e/e2e_basic.sh                                 # канал создаёт аккаунт пользователя
+#   TGFS_BIN=... BENCH_BIN=... tests/e2e/e2e_basic.sh
+#   cmake --preset dev -DTELEGA_FS_BUILD_TOOLS=ON -DTELEGA_FS_E2E=ON &&
+#     TELEGA_FS_E2E_RUN=1 ctest --test-dir build/dev -L e2e --output-on-failure
+# Шаги идут подряд и отдельно не запускаются (для запуска по этапам и возобновления есть
+# e2e_resources.sh и e2e_maint.sh). Нужный шаг можно повторить вручную командами tgfs-bench e2e
+# (setup, check-empty, inspect, wipe, teardown), id канала лежит в файле E2E_CHAT_FILE.
 #
-# Время: около 15 минут. Монтирование A после init ждёт до 90 с, пока кэш TDLib покажет голову
-# (раздел «Кэш TDLib» в docs/experiments/10-m2-e2e.md), заливка 200 МиБ упирается в send_rate.
+# Шаги:
+#   1. Канал: проверка пустоты (E2E_CHAT_ID) или создание аккаунтом пользователя.
+#   2. Машина A (изолированные XDG-каталоги): login --bot, init --chat.
+#   3. A: mount, запись, fsync, второй fsync, fsyncdir, чтение залитого, размонтирование.
+#   4. A: повторное монтирование, сверка, запись файла без fsync и остановка по SIGTERM.
+#   5. Машина B (пустые каталоги, тот же config.toml): login --bot заново, mount (ключ шифрования
+#      берётся из головы канала), чтение всего с пустым кэшем, сверка sha256.
+#   6. A: logout, login, mount, сверка.
+#   7. tgfs-bench e2e inspect: имена документов и подписи.
+#   8. Уборка: E2E_CHAT_ID: бот удаляет свои сообщения; иначе аккаунт удаляет канал.
+#
+# Переменные (по умолчанию в скобках): TGFS_BIN, BENCH_BIN, E2E_CREDS, E2E_CHAT_ID, E2E_WORK
+# (mktemp в $TMPDIR), E2E_CHAT_FILE (файл с id канала вне репозитория; при E2E_CHAT_ID это
+# $E2E_WORK/chat-id), E2E_SIZE_MIB (200), E2E_KEEP_CHANNEL=1 (не удалять канал или сообщения в
+# нём), E2E_WIPE_FIRST=1 (с E2E_CHAT_ID: сначала убрать из канала документы telega-fs),
+# E2E_SCAN_MAX_ID (100000: потолок серверного id зонда; выше него проверка и уборка
+# завершаются ошибкой), E2E_KEEP_SESSIONS=1 (не делать logout A и B в конце), E2E_REUSE_CHANNEL=1 (без E2E_CHAT_ID:
+# канал уже создан, E2E_CHAT_FILE существует, закреплённых сообщений в нём нет),
+# E2E_SYNC_TIMEOUT (sync_timeout в config.toml, 600s), E2E_BENCH_ARGS (дополнительные глобальные
+# опции tgfs-bench, например --state-dir).
+#
+# Правила безопасности: нагрузку несёт бот. Аккаунт пользователя участвует только в создании и
+# удалении канала и не отправляет сообщений. Данные прогона лежат в E2E_WORK, репозиторий скрипт
+# не меняет.
 
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
+# shellcheck disable=SC1091
+. "$here/lib.sh"
 
 # Из ctest без явного разрешения тест пропускается (код 77), чтобы `ctest -LE long` не ходил в сеть.
 if [[ "${E2E_CTEST:-}" == "1" && "${TELEGA_FS_E2E_RUN:-}" != "1" ]]; then
@@ -45,15 +85,18 @@ if [[ "${E2E_CTEST:-}" == "1" && "${TELEGA_FS_E2E_RUN:-}" != "1" ]]; then
     exit 77
 fi
 
-TGFS_BIN="${TGFS_BIN:-$repo/build/w-e2e/src/telega-fs}"
-BENCH_BIN="${BENCH_BIN:-$repo/build/w-e2e/tools/bench/tdbench/tgfs-bench}"
+TGFS_BIN="${TGFS_BIN:-$repo/build/dev/src/telega-fs}"
+BENCH_BIN="${BENCH_BIN:-$repo/build/dev/tools/bench/tdbench/tgfs-bench}"
 E2E_CREDS="${E2E_CREDS:-$repo/cred.secret}"
 E2E_SIZE_MIB="${E2E_SIZE_MIB:-200}"
 E2E_SYNC_TIMEOUT="${E2E_SYNC_TIMEOUT:-600s}"
 E2E_CHAT_FILE="${E2E_CHAT_FILE:-${XDG_DATA_HOME:-$HOME/.local/share}/telega-fs-bench/e2e-chat}"
 
 for bin in "$TGFS_BIN" "$BENCH_BIN"; do
-    [[ -x "$bin" ]] || { echo "no executable: $bin" >&2; exit 2; }
+    [[ -x "$bin" ]] || {
+        echo "no executable: $bin (build with -DTELEGA_FS_BUILD_TOOLS=ON or set TGFS_BIN and BENCH_BIN)" >&2
+        exit 2
+    }
 done
 
 cred() { # значение ключа из файла кредов, ничего не печатает
@@ -65,22 +108,35 @@ TELEGA_API_HASH="${TELEGA_API_HASH:-$(cred api-hash)}"
 bot_token="${TELEGA_BOT_TOKEN:-$(cred bot-token)}"
 unset TELEGA_BOT_TOKEN
 [[ -n "$TELEGA_API_ID" && -n "$TELEGA_API_HASH" && -n "$bot_token" ]] ||
-    { echo "need api-id, api-hash and bot-token (E2E_CREDS or environment)" >&2; exit 2; }
+    {
+        echo "need api-id, api-hash and bot-token: a file E2E_CREDS (default: cred.secret in the repository root;" >&2
+        echo "lines api-id=..., api-hash=..., bot-token=...) or TELEGA_API_ID, TELEGA_API_HASH, TELEGA_BOT_TOKEN" >&2
+        exit 2
+    }
+E2E_CHAT_ID="${E2E_CHAT_ID:-}"
+if [[ -n "$E2E_CHAT_ID" && ! "$E2E_CHAT_ID" =~ ^-100[0-9]+$ ]]; then
+    echo "E2E_CHAT_ID must be the id of a channel: -100 and digits, for example -1001234567890" >&2
+    exit 2
+fi
 export TELEGA_API_ID TELEGA_API_HASH
 
 W="${E2E_WORK:-$(mktemp -d "${TMPDIR:-/tmp}/tgfs-e2e.XXXXXX")}"
 mkdir -p "$W/logs"
 chmod 700 "$W"
 echo "[e2e] work dir: $W"
+bench_creds=""   # путь появляется ниже, после установки trap
 
 pids=()
 mounts=()
-channel_created=0
+channel_created=0   # канал создан этим прогоном (удаляется в конце)
+channel_claimed=0   # свой канал проверен на пустоту (бот чистит его в конце)
 
 now() { date +%s.%N; }
 elapsed() { awk -v a="$1" -v b="$(now)" 'BEGIN { printf "%.1f", b - a }'; }
 log() { echo "[e2e] $*"; }
 fail() { echo "[e2e] FAIL: $*" >&2; exit 1; }
+die() { fail "$@"; }       # для lib.sh
+env_die() { fail "$@"; }
 
 # Команда на «машине» A или B: свои XDG-каталоги.
 on() {
@@ -89,18 +145,39 @@ on() {
     XDG_CONFIG_HOME="$W/$m/config" XDG_DATA_HOME="$W/$m/data" XDG_CACHE_HOME="$W/$m/cache" "$@"
 }
 tgfs() { local m=$1; shift; on "$m" "$TGFS_BIN" "$@"; }
-bench() { "$BENCH_BIN" ${E2E_BENCH_ARGS:-} --creds "$E2E_CREDS" "$@"; }
+bench() { "$BENCH_BIN" ${E2E_BENCH_ARGS:-} --creds "$bench_creds" "$@"; }
 
 cleanup() {
     local rc=$?
     set +e
+    # Данные в канале будут удалены (канал или сообщения в нём): тогда демоны надо остановить так,
+    # чтобы они точно не коммитили после уборки.
+    local destroy=0
+    if [[ "${E2E_KEEP_CHANNEL:-0}" != 1 && ( "$channel_created" == 1 || "$channel_claimed" == 1 ) ]]; then
+        destroy=1
+    fi
     for m in "${mounts[@]:-}"; do
         [[ -n "$m" ]] && mountpoint -q "$m" 2>/dev/null && fusermount3 -u "$m" 2>/dev/null
     done
+    local limit=60
+    [[ "$destroy" == 1 ]] && limit=20
     for p in "${pids[@]:-}"; do
         [[ -n "$p" ]] || continue
-        for _ in $(seq 1 60); do kill -0 "$p" 2>/dev/null || break; sleep 1; done
+        for _ in $(seq 1 "$limit"); do kill -0 "$p" 2>/dev/null || break; sleep 1; done
     done
+    if [[ "$destroy" == 1 ]]; then
+        for p in "${pids[@]:-}"; do
+            [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null
+        done
+        for p in "${pids[@]:-}"; do
+            [[ -n "$p" ]] || continue
+            for _ in $(seq 1 10); do kill -0 "$p" 2>/dev/null || break; sleep 1; done
+        done
+        for m in "${mounts[@]:-}"; do
+            [[ -n "$m" ]] && mountpoint -q "$m" 2>/dev/null && fusermount3 -uz "$m" 2>/dev/null
+        done
+        chan_kill_daemons   # то, что не записано в pid-файл: по командной строке
+    fi
     # Сессии бота «машин» A и B закрываются (logOut), чтобы не копить авторизации бота.
     if [[ "${E2E_KEEP_SESSIONS:-0}" != 1 ]]; then
         for m in A B; do
@@ -109,14 +186,33 @@ cleanup() {
                 </dev/null || true
         done
     fi
-    if [[ "$channel_created" == 1 && "${E2E_KEEP_CHANNEL:-0}" != 1 ]]; then
+    if [[ "$destroy" == 1 && "$channel_created" == 1 ]]; then
         log "teardown: deleting the channel"
         bench e2e --chat-file "$E2E_CHAT_FILE" teardown >"$W/logs/teardown.out" 2>&1 ||
             echo "[e2e] teardown failed, delete the channel by hand (see $W/logs/teardown.out)" >&2
+    elif [[ "$destroy" == 1 ]]; then
+        # Уборка не удалась или канал не пуст после неё: прогон считается неудачным.
+        if ! chan_cleanup; then
+            echo "[e2e] the cleanup failed: delete the pin and the .bin/.idx documents by hand" >&2
+            [[ "$rc" == 0 ]] && rc=1
+        fi
+    elif [[ "$channel_claimed" == 1 ]]; then
+        echo "[e2e] E2E_KEEP_CHANNEL=1: the telega-fs messages stay in the channel; the next run needs an empty one (E2E_WIPE_FIRST=1)" >&2
     fi
+    [[ -n "$bench_creds" ]] && rm -f "$bench_creds"
     exit "$rc"
 }
 trap cleanup EXIT
+
+# tgfs-bench читает креды только из файла: собираем его из уже найденных значений (0600, убирается
+# в конце). Свой канал: id кладётся в файл для подкоманд `tgfs-bench e2e`.
+chan_guard_start
+bench_creds="$W/bench-creds"
+(umask 077; printf 'api-id=%s\napi-hash=%s\nbot-token=%s\n' "$TELEGA_API_ID" "$TELEGA_API_HASH" "$bot_token" >"$bench_creds")
+if [[ -n "$E2E_CHAT_ID" ]]; then
+    (umask 077; printf '%s\n' "$E2E_CHAT_ID" >"$W/chat-id")
+    E2E_CHAT_FILE="$W/chat-id"
+fi
 
 # --- config.toml и keyfile ---
 
@@ -204,13 +300,24 @@ verify_tree() { # verify_tree МАШИНА MNT ИМЯ stage1|full: содерж�
 
 # --- 1. канал ---
 
-if [[ "${E2E_REUSE_CHANNEL:-0}" == 1 ]]; then
+if [[ -n "$E2E_CHAT_ID" ]]; then
+    # Свой канал. Отказываемся, если в нём уже есть голова telega-fs или документы: прогон
+    # затёр бы чужую файловую систему. Дальше работает только бот.
+    log "step 1: checking that your channel is empty (the bot only, no user account)"
+    ensure_channel_empty
+    channel_claimed=1
+elif [[ "${E2E_REUSE_CHANNEL:-0}" == 1 ]]; then
     [[ -r "$E2E_CHAT_FILE" ]] || fail "E2E_REUSE_CHANNEL=1 but E2E_CHAT_FILE does not exist"
 else
     log "step 1: creating the channel (user account: setup only, no messages)"
     t=$(now)
     bench e2e --chat-file "$E2E_CHAT_FILE" setup >"$W/logs/setup.out" 2>&1 ||
-        { tail -n 5 "$W/logs/setup.out" >&2; fail "channel setup"; }
+        {
+            tail -n 5 "$W/logs/setup.out" >&2
+            echo "[e2e] the user account must be logged in to tgfs-bench (tgfs-bench --qr login);" >&2
+            echo "[e2e] or set E2E_CHAT_ID to a channel you made yourself, the bot is its administrator" >&2
+            fail "channel setup"
+        }
     channel_created=1
     log "channel ready in $(elapsed "$t") s"
 fi
@@ -280,7 +387,7 @@ sync "$mnt_a/big.bin" || fail "fsync of the big file failed (EIO?)"
 T_FSYNC1="$(elapsed "$t")"
 log "fsync #1 (upload of everything + commit): $T_FSYNC1 s"
 
-# CAS-повтор (SPEC 7.1 шаг 4): второй коммит вскоре после первого, голова может быть из кэша TDLib.
+# Повтор при конфликте записи головы: второй коммит вскоре после первого, голова может быть из кэша TDLib.
 t=$(now)
 cp "$src/second.txt" "$mnt_a/second.txt"
 sync "$mnt_a/second.txt" || fail "fsync #2 failed (EIO?)"

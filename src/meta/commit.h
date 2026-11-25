@@ -1,6 +1,11 @@
 #pragma once
 
-// CommitManager — коммит индекса в канал (SPEC 6.6, 7.1) и отложенная уборка (SPEC 7.4).
+// CommitManager — коммит индекса в канал и отложенная уборка.
+//
+// Шаги коммита (по этим номерам на них ссылаются комментарии): 1 вид блоба (снимок или дельта), 2
+// забор патча или фиксация среза под блокировкой MetaStore, 3 сборка блоба, 4 CAS по голове канала,
+// 5 заливка, 6 pin (точка коммита), 7 unpin прежней головы, 8 запись в state.sqlite,
+// 9 отложенная уборка.
 //
 // Устройство:
 // - коммиты идут строго по одному (commit_mu_). Их запускает либо вызывающий поток
@@ -9,18 +14,17 @@
 // - источник правды о закоммиченном состоянии — state.sqlite (base_generation, head_msg_id,
 //   head_hash, chain, pending_patchsets, force_snapshot, index_dirty). В памяти лежат только
 //   флаги для фонового потока и кэш base_generation для Vfs;
-// - Store вызывается только без блокировки MetaStore (SPEC 9): под ней делаются лишь забор
+// - Store вызывается только без блокировки MetaStore: под ней делаются лишь забор
 //   патча / фиксация среза снимка (шаг 2) и вычисление index_dirty (шаг 8). Запись забранного
-//   патча в pending_patchsets идёт после того, как блокировка MetaStore отпущена (SPEC 6.6).
-//   Копия снимка (backup, VACUUM INTO) снимается уже без блокировки (SPEC 6.6, «Снимок без
-//   блокировки записи»);
+//   патча в pending_patchsets идёт после того, как блокировка MetaStore отпущена.
+//   Копия снимка (backup, VACUUM INTO) снимается уже без блокировки;
 // - порядок патчей в pending_patchsets совпадает с порядком забора: каждый забор (коммит или
 //   промежуточный) берёт patch_queue_mu_ до захвата MetaStore и держит его до конца записи
 //   патча (и до чтения pending у коммита). Снимок держит его только на время фиксации среза и
 //   чтения max_pending_seq (доли миллисекунды): патч, забранный до среза, успевает лечь в
 //   pending (его строки в срезе, шаг 8 его удалит), забранный после — уже не входит в снимок
 //   и переживёт шаг 8;
-// - промежуточный забор (SPEC 6.6): фоновый поток забирает патч в pending_patchsets, когда
+// - промежуточный забор: фоновый поток забирает патч в pending_patchsets, когда
 //   MetaStore насчитал patch_take_rows изменённых строк. Он идёт и во время заливки блоба,
 //   поэтому коммит склеивает и удаляет только свои патчи (по seq);
 // - порядок блокировок: commit_mu_ → patch_queue_mu_ → MetaStore → StateStore;
@@ -74,7 +78,7 @@ class Clock {
 Clock& steady_clock();
 
 // ---------------------------------------------------------------------------------------------
-// Тело блоба индекса (SPEC 6.3)
+// Тело блоба индекса
 
 // Тело дельты до сжатия: u32 LE n, n × i64 LE msg_id цепочки, затем patchset.
 Bytes encode_delta_body(const std::vector<int64_t>& chain, ByteSpan patchset);
@@ -86,7 +90,7 @@ struct DeltaBody {
 // Разобрать тело дельты (уже распакованное). Неверный формат — crypto::CorruptError.
 DeltaBody decode_delta_body(ByteSpan body);
 
-// Уровни zstd (SPEC 7.1, шаг 3).
+// Уровни zstd.
 inline constexpr int kSnapshotZstdLevel = 9;
 inline constexpr int kDeltaZstdLevel = 3;
 
@@ -94,18 +98,18 @@ inline constexpr int kDeltaZstdLevel = 3;
 // монтирование узнаёт свой снимок, если процесс упал между pin и записью state.sqlite.
 std::filesystem::path snapshot_tmp_path(const std::filesystem::path& tmp_dir, uint64_t generation);
 
-// Сырая копия среза до VACUUM INTO: tmp/index-<generation>.sqlite.raw (SPEC 6.6). Живёт только
+// Сырая копия среза до VACUUM INTO: tmp/index-<generation>.sqlite.raw. Живёт только
 // во время копирования; после сбоя её убирает cleanup_tmp монтирования (префикс «index-»).
 std::filesystem::path snapshot_raw_path(const std::filesystem::path& tmp_dir, uint64_t generation);
 
-// Поставить на MetaStore dirty-хук (SPEC 6.6): долговечно index_dirty = 1 в state.sqlite,
+// Поставить на MetaStore dirty-хук: долговечно index_dirty = 1 в state.sqlite,
 // затем extra (если задан). Хук вызывается под мьютексом MetaStore.
 void install_dirty_hook(MetaStore& meta, StateStore& state, std::function<void()> extra = {});
 
 // ---------------------------------------------------------------------------------------------
 // Параметры и результат
 
-// Ключи и поля заголовка, общие для всех блобов ФС (SPEC 6.3, 11).
+// Ключи и поля заголовка, общие для всех блобов ФС.
 struct BlobKeys {
     crypto::Key k_index;
     FsUuid fs_uuid{};
@@ -122,15 +126,15 @@ struct CommitConfig {
     double checkpoint_ratio = 0.25;
     uint32_t retain_generations = 8;
 
-    // Отсрочка коммита по commit_interval, пока очередь заливки не пуста (SPEC 7.1): не дольше
+    // Отсрочка коммита по commit_interval, пока очередь заливки не пуста: не дольше
     // чем commit_defer_factor · commit_interval с прошлого коммита. Очередь опрашивается раз в
     // defer_recheck. Остальные условия коммита (commit_every_chunks, fsync, размонтирование)
     // идут без отсрочки.
     uint32_t commit_defer_factor = 5;
     std::chrono::milliseconds defer_recheck{1'000};
 
-    // CAS в шаге 4 (SPEC 7.1): голова канала — 404 или более старый наш блоб, а свой последний
-    // set_head был меньше cas_retry_window назад (кэш TDLib, SPEC 2). Проверка повторяется раз
+    // CAS в шаге 4: голова канала — 404 или более старый наш блоб, а свой последний
+    // set_head был меньше cas_retry_window назад (кэш TDLib). Проверка повторяется раз
     // в cas_retry_period до конца окна, и только потом это конфликт.
     std::chrono::milliseconds cas_retry_window{90'000};
     std::chrono::milliseconds cas_retry_period{10'000};
@@ -139,12 +143,12 @@ struct CommitConfig {
     std::chrono::milliseconds retry_min{1'000};
     std::chrono::milliseconds retry_max{60'000};
 
-    // Промежуточный забор патча после стольких изменённых строк (SPEC 6.6); 0 — выключен.
+    // Промежуточный забор патча после стольких изменённых строк; 0 — выключен.
     uint64_t patch_take_rows = 2000;
 
     bool read_only = false;  // монтирование с --ro
     // Коммит без шага 9 (отложенной уборки): обслуживающие команды вроде fsck --repair ничего
-    // не удаляют в канале (SPEC 12.3).
+    // не удаляют в канале.
     bool skip_gc = false;
 
     // Тестовый хук: вызывается после отпускания блокировки MetaStore, перед записью забранного
@@ -159,7 +163,7 @@ struct CommitConfig {
     Clock* clock = nullptr;  // nullptr — steady_clock()
 };
 
-// Замеры одного коммита (эксперимент E1, SPEC 17.4).
+// Замеры одного коммита (эксперимент E1).
 struct CommitMetrics {
     std::optional<crypto::BlobKind> kind;
     uint64_t generation = 0;
@@ -193,7 +197,7 @@ struct CommitStats {
     uint64_t snapshots = 0;
     uint64_t deltas = 0;
     uint64_t failures = 0;
-    uint64_t intermediate_takes = 0;  // промежуточные заборы патча (SPEC 6.6)
+    uint64_t intermediate_takes = 0;  // промежуточные заборы патча
     std::optional<CommitMetrics> last;
     std::string last_error;  // без секретов
 };
@@ -227,21 +231,21 @@ class CommitManager final : public Committer {
     // снимком (команда snapshot управляющего сокета). Ошибка — CommitError.
     CommitResult commit(bool force_snapshot = false);
 
-    // mount --force-local (SPEC 7.2, G_r < G_l): CAS следующего коммита идёт против реальной
+    // mount --force-local (откат головы, G_r < G_l): CAS следующего коммита идёт против реальной
     // головы канала (msg_id, generation), а не против (H, G) из state.sqlite.
     void set_cas_override(int64_t head_msg_id, uint64_t head_generation);
-    // mount --force-local при потере головы (SPEC 7.2): CAS ждёт «головы нет» (foreign_msg_id пуст,
+    // mount --force-local при потере головы: CAS ждёт «головы нет» (foreign_msg_id пуст,
     // prev_msg_id = 0) либо именно закреплённое чужое сообщение (не блоб индекса): шаг 7 его не
     // открепляет, prev_msg_id = 0.
     void set_cas_override_lost_head(std::optional<int64_t> foreign_msg_id);
 
-    // Промежуточный забор: забрать патч в pending_patchsets, не делая коммит (SPEC 6.6). Не
+    // Промежуточный забор: забрать патч в pending_patchsets, не делая коммит. Не
     // делается (nullopt), если есть неподтверждённый pin, следующий блоб обязан быть снимком,
     // файловая система read-only или забирать нечего. Сбой записи патча ставит
     // force_snapshot = 1 и бросает CommitError. Зовёт фоновый поток; открыт для тестов.
     std::optional<TakeStats> take_intermediate();
 
-    // Очередь заливки не пуста? (SPEC 7.1: пока да, коммит по commit_interval откладывается.)
+    // Очередь заливки не пуста? (Пока да, коммит по commit_interval откладывается.)
     // Зовётся из фонового потока без блокировок CommitManager. Vfs ставит пробник после
     // создания и ДОЛЖЕН снять (пустая функция) до своего уничтожения; снятие ждёт идущего
     // вызова. Без пробника очередь считается пустой.
@@ -254,8 +258,8 @@ class CommitManager final : public Committer {
 
     [[nodiscard]] CommitStats stats() const;
 
-    // Отложенная уборка (SPEC 7.4) для текущего base_generation без коммита: команда `gc`
-    // (SPEC 12.3). Та же уборка, что идёт шагом 9 каждого коммита, но с сегодняшним
+    // Отложенная уборка для текущего base_generation без коммита: команда `gc`.
+    // Та же уборка, что идёт шагом 9 каждого коммита, но с сегодняшним
     // retain_generations: после его уменьшения созревают чанки и цепочки, которые прошлые
     // коммиты оставили. Под commit_mu_, поэтому не пересекается с коммитом. Ошибка Store при
     // удалении сообщений не бросается (остаток уйдёт со следующей уборкой), ошибка индекса —
@@ -278,10 +282,10 @@ class CommitManager final : public Committer {
         // теле). Патчи с большим seq дописал промежуточный забор, шаг 8 их не трогает.
         int64_t max_pending_seq = 0;
         // CLOCK_REALTIME забора патча (дельта) или фиксации среза (снимок), взятый под блокировкой
-        // MetaStore; пишется в state.sqlite шагом 8 как committed_take_ns (SPEC 6.4).
+        // MetaStore; пишется в state.sqlite шагом 8 как committed_take_ns.
         int64_t take_ns = 0;
         // false: pin точно не прошёл (set_head вернул permanent). Тогда кэш TDLib ничего не
-        // скрывает, и неподтверждённая попытка разбирается одним чтением головы (SPEC 7.1).
+        // скрывает, и неподтверждённая попытка разбирается одним чтением головы.
         bool pin_may_have_passed = true;
         // Эпоха force_snapshot на момент среза (только снимок): флаг, поставленный после среза
         // (промежуточный забор во время копии не смог сохранить патч), снимок не покрывает, и
@@ -291,7 +295,7 @@ class CommitManager final : public Committer {
     struct CasExpect {
         std::optional<int64_t> msg_id;  // nullopt — канал пуст (первый коммит после init)
         uint64_t generation = 0;
-        // msg_id — чужое сообщение, не блоб нашей ФС (потеря головы, SPEC 7.2): голова
+        // msg_id — чужое сообщение, не блоб нашей ФС (потеря головы): голова
         // сверяется по одному msg_id, prev_msg_id = 0, шаг 7 коммита сообщение не открепляет.
         bool foreign = false;
     };
@@ -317,9 +321,9 @@ class CommitManager final : public Committer {
     void append_patch(const Bytes& patch);
     [[nodiscard]] bool take_due() const;
     [[nodiscard]] bool uploads_busy();
-    // Голова для разбора неподтверждённого pin с повтором в окне кэша TDLib (SPEC 7.1).
+    // Голова для разбора неподтверждённого pin с повтором в окне кэша TDLib.
     std::optional<store::HeadInfo> read_head_for_unconfirmed(const Uploaded& up);
-    // CAS шага 4 с повтором после своего pin (SPEC 7.1). true — голова совпала.
+    // CAS шага 4 с повтором после своего pin. true — голова совпала.
     bool cas_with_retry(const std::optional<store::HeadInfo>& first, const CasExpect& expect);
     [[nodiscard]] static bool matches(const std::optional<store::HeadInfo>& head,
                                       const CasExpect& expect);
@@ -361,7 +365,7 @@ class CommitManager final : public Committer {
     std::mutex patch_queue_mu_;
 
     // Под commit_mu_: когда мы последний раз звали set_head (pin мог состояться, даже если
-    // вызов вернул ошибку). Нужно CAS-повтору (SPEC 7.1, шаг 4).
+    // вызов вернул ошибку). Нужно CAS-повтору (шаг 4).
     std::optional<Clock::time_point> last_pin_;
 
     std::mutex probe_mu_;  // листовой: под ним зовётся только пробник

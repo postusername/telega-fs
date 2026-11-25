@@ -16,7 +16,7 @@ namespace telega::meta {
 
 namespace {
 
-// Схема ровно как в SPEC 6.4.
+// Схема state.sqlite.
 constexpr std::string_view kSchema = R"sql(
 CREATE TABLE state (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 
@@ -64,7 +64,7 @@ CREATE TABLE read_cache (
 );
 )sql";
 
-// Схема M2 отличалась от текущей: open_pack со столбцом off (всегда пустая, SPEC 6.4) и без
+// Старая схема отличалась от текущей: open_pack со столбцом off (всегда пустая) и без таблицы
 // read_cache. При открытии open_pack пересоздаётся, read_cache добавляется, остальное не
 // трогается.
 constexpr std::string_view kOpenPackSchema = R"sql(
@@ -146,9 +146,9 @@ void StateStore::create(const std::filesystem::path& path) {
 }
 
 StateStore::StateStore(const std::filesystem::path& path, bool migrate) : db_(open_existing(path)) {
-    // Миграция схемы M2 (SPEC 6.4): у новой open_pack есть столбец added_ns, есть read_cache.
+    // Миграция старой схемы: у новой open_pack есть столбец added_ns, есть read_cache.
     // Проверка схемы идёт без записи: актуальную базу открытие не меняет. В --ro (migrate = false)
-    // state.sqlite не меняется вовсе (SPEC 7.2): пакеты там не используются, а list_open_pack
+    // state.sqlite не меняется вовсе: пакеты там не используются, а list_open_pack
     // старой схемы возвращает пустой список.
     bool has_added_ns = false;
     bool has_read_cache = false;
@@ -525,7 +525,7 @@ std::vector<OpenPackRow> StateStore::list_open_pack() {
     const std::lock_guard lock(mutex_);
     std::vector<OpenPackRow> out;
     if (legacy_schema_) {
-        return out;  // open_pack схемы M2 (--ro без миграции): пакетов нет
+        return out;  // open_pack старой схемы (--ro без миграции): пакетов нет
     }
     Stmt st = db_.cached("SELECT ino, version, len, added_ns FROM open_pack ORDER BY ino");
     while (st.step()) {

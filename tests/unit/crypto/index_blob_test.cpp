@@ -1,4 +1,4 @@
-// crypto/index_blob: заголовок и тело блоба индекса, zstd (SPEC 6.3).
+// crypto/index_blob: заголовок и тело блоба индекса, zstd.
 
 #include "crypto/index_blob.h"
 

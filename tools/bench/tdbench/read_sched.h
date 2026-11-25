@@ -1,10 +1,10 @@
 #pragma once
 
-// Прототип планировщика скачиваний и readahead по SPEC 8.2 (E10, SPEC 17.13). Компактный
+// Прототип планировщика скачиваний и readahead по правилам демона (E10). Компактный
 // самостоятельный класс для tgfs-bench: боевую версию в TelegramStore напишут по выводам E10,
 // поэтому здесь важна ясность поведения, а не универсальность.
 //
-// Правила (SPEC 8.2, 10.2):
+// Правила:
 //   - по файлу активно не больше одного скачивания (offset, limit, priority), `downloadFile` с
 //     synchronous = false; ход приходит в `updateFile`: готов префикс
 //     [download_offset, download_offset + downloaded_prefix_size);
@@ -177,7 +177,7 @@ class ReadScheduler {
                 return f.path;
             }
         }
-        // Проверка готового у TDLib (SPEC 8.2): диапазон мог скачаться раньше.
+        // Проверка готового у TDLib: диапазон мог скачаться раньше.
         try {
             const td::Json r = client_.call(td::Json{
                 {"@type", "getFileDownloadedPrefixSize"}, {"file_id", file_id}, {"offset", a}});

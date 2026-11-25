@@ -1,4 +1,4 @@
-// TdError: разбор ответа error и retry_after (SPEC 10.1, 10.2).
+// TdError: разбор ответа error и retry_after.
 
 #include "td/td_error.h"
 

@@ -690,7 +690,7 @@ TEST_F(LocalDirStoreTest, ConcurrentPutAndRead) {
     EXPECT_EQ(head.msg_id, store.pinned().back());
 }
 
-// ---- Статистика чтения (SPEC 8.2, 14) ----------------------------------------------------
+// ---- Статистика чтения ----------------------------------------------------
 
 TEST_F(LocalDirStoreTest, CountsReadRangeBytesAndPrefetchCallsInAFileForOtherProcesses) {
     LocalDirStore store(dir_);

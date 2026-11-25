@@ -1,4 +1,4 @@
-// login и whoami: вход тестового аккаунта и getMe (SPEC 17.2).
+// login и whoami: вход тестового аккаунта и getMe.
 
 #include <iostream>
 #include <map>

@@ -1,5 +1,5 @@
-// Учёт staging, лимиты и обратное давление (SPEC 8.3), запечатывание выше
-// staging_high_watermark (SPEC 8.1), RMW без буфера на чанк (SPEC 8.1).
+// Учёт staging, лимиты и обратное давление, запечатывание выше
+// staging_high_watermark, RMW без буфера на чанк.
 //
 // Тесты на параллельность синхронизируются барьерами и условиями (GateStore держит заливку на
 // put_chunk, ожидания идут по условию, а не по времени); паузы нужны только в проверках «ничего
@@ -164,7 +164,7 @@ TEST_F(VfsStaging, WriteBlocksAtLimitMinusReserveAndResumesWhenUploadsFreeSpace)
     const int stuck_at = done.load();
     EXPECT_LT(stuck_at, kPieces);
 
-    // Пока write ждёт места, другие операции отвечают (SPEC 8.3).
+    // Пока write ждёт места, другие операции отвечают.
     EXPECT_EQ(vfs.getattr(other).size, 10);
     EXPECT_EQ(str_of(vfs.read(other, 0, 100)), "small file");
     EXPECT_EQ(vfs.getattr(big).ino, big);
@@ -367,7 +367,7 @@ TEST_F(VfsStaging, UsedEqualsFileLengthsAndInvariantHoldsWithParallelWriters) {
     // 24 МиБ данных при пределе 8 МиБ: писатели упираются, заливка стоит на воротах.
     ASSERT_TRUE(wait_until([&] { return vfs.staging().used() + kPiece > cap; }));
     ASSERT_TRUE(gate->wait_entered(2));
-    // Занятое равно длинам файлов в staging/ и tmp/ (логическая длина, SPEC 8.3).
+    // Занятое равно длинам файлов в staging/ и tmp/ (логическая длина).
     EXPECT_TRUE(wait_until(
         [&] { return vfs.staging().used() == dir_bytes(env.staging()) + dir_bytes(env.tmp()); }));
     gate->open_gate();
@@ -594,7 +594,7 @@ TEST(StagingBudgetLease, PassesOverTheLimitWhenThereAreNoHoldersAfterALeaseWasRe
         stop = true;
     });
     EXPECT_TRUE(wait_until([&] { return stop.load(); }, milliseconds(5'000)))
-        << "acquire_internal waits although nobody holds a lease (SPEC 8.3)";
+        << "acquire_internal waits although nobody holds a lease";
     stop = true;
     b.notify_all();
     t.join();

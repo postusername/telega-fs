@@ -1,4 +1,4 @@
-// e4: скачивание диапазонов (SPEC 17.7), только в режиме бота. Канал создаёт пользователь (только
+// e4: скачивание диапазонов, только в режиме бота. Канал создаёт пользователь (только
 // настройка), документ заливает и скачивает бот.
 //
 //   tgfs-bench e4 setup      канал, бот-администратор, документ 512 МиБ (seed), getRemoteFile сразу
@@ -31,7 +31,7 @@ namespace fs = std::filesystem;
 using std::chrono::seconds;
 
 constexpr const char* kState = "e4";
-constexpr int64_t kSegment = 65552;  // 64 КиБ + тег (SPEC 5)
+constexpr int64_t kSegment = 65552;  // 64 КиБ + тег
 constexpr int64_t kSegmentHeader = 40;
 constexpr int64_t k64K = int64_t{64} * 1024;
 
@@ -594,7 +594,7 @@ void cmd_teardown(BenchEnv& env, const BenchOptions& options, const E4Options& e
 }  // namespace
 
 void add_e4_command(CLI::App& app, const BenchOptions& options, int* exit_code) {
-    auto* cmd = app.add_subcommand("e4", "Experiment E4: range downloads, bot mode (SPEC 17.7)");
+    auto* cmd = app.add_subcommand("e4", "Experiment E4: range downloads, bot mode");
     cmd->require_subcommand(1);
     auto e4 = std::make_shared<E4Options>();
     e4->out = default_out_dir("04-e4-range-download");

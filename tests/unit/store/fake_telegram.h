@@ -2,7 +2,7 @@
 
 // Имитация канала Telegram поверх FakeTransport для тестов TelegramStore: сообщения с
 // документами, закрепления, getMessages / downloadFile / getRemoteFile, апдейты отправки и
-// программируемые сбои. Повторяет особенности TDLib из SPEC 2: getChat первым запросом,
+// программируемые сбои. Повторяет особенности TDLib: getChat первым запросом,
 // getMessages возвращает null для отсутствующих, unpin и удаление требуют, чтобы TDLib «знал»
 // сообщение (после forget_session() — нет), getChatPinnedMessage без закреплённых — 404,
 // отправка приходит апдейтом (возможно, раньше ответа или с задержкой, и тогда deleteMessages по
@@ -10,7 +10,7 @@
 // ссылку потом убирают: downloadFile сам это замечает и качает заново (FileManager::
 // check_local_location), deleteFile для такого файла ничего не делает (путь вне files_directory).
 //
-// Скачивания повторяют E10 (SPEC 17.13): downloadFile асинхронный, ход приходит апдейтами
+// Скачивания повторяют E10: downloadFile асинхронный, ход приходит апдейтами
 // updateFile по частям; окна исполняются по одному, строго по приоритету (при равных — самый новый
 // запрос первым); повторный вызов с теми же offset и limit меняет приоритет и не отменяет окно;
 // тот же offset с большим limit продлевает окно без паузы; другой offset заменяет окно (скачанное
@@ -997,7 +997,7 @@ class FakeTelegram {  // NOLINT(clang-analyzer-optin.performance.Padding): те�
     std::condition_variable engine_cv_;
     std::thread engine_;
     std::atomic<int> max_windows_{0};
-    int64_t next_server_id_ = 2;  // id 1 — создание канала (SPEC 4)
+    int64_t next_server_id_ = 2;  // id 1 — создание канала
     int32_t next_file_id_ = 100;
     std::map<int32_t, int32_t> aliases_;  // второй file_id → настоящий
     int64_t next_temp_ = 1;

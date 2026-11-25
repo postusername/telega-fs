@@ -1,6 +1,6 @@
 #pragma once
 
-// Граница между путями данных (Vfs, src/vfs) и коммитом (CommitManager, SPEC 7.1).
+// Граница между путями данных (Vfs, src/vfs) и коммитом (CommitManager).
 // Vfs зависит только от этого интерфейса; в тестах Vfs его заменяет фейк.
 
 #include <cstdint>
@@ -22,20 +22,20 @@ class Committer {
     virtual ~Committer() = default;
 
     // Синхронный коммит (fsync, fsyncdir, sync, размонтирование). Возвращается после точки
-    // коммита (pin, SPEC 7.1 шаг 6) и записи state.sqlite (шаг 8), либо бросает CommitError.
+    // коммита (pin) и записи state.sqlite, либо бросает CommitError.
     // Если индекс не менялся с прошлого коммита, сразу возвращается. Потокобезопасен:
     // параллельные вызовы сливаются в один коммит или идут друг за другом.
-    // Вызывающий НЕ ДОЛЖЕН держать блокировку MetaStore (SPEC 9).
+    // Вызывающий НЕ ДОЛЖЕН держать блокировку MetaStore.
     virtual void commit_now() = 0;
 
-    // Залит и внесён в index.sqlite очередной чанк (счётчик commit_every_chunks, SPEC 7.1).
+    // Залит и внесён в index.sqlite очередной чанк (счётчик commit_every_chunks).
     // Не блокирует: коммит, если нужен, идёт в фоне.
     virtual void chunk_uploaded() = 0;
 
-    // Текущий base_generation (G). Нужен для dead_since_gen при освобождении чанков (SPEC 7.4).
+    // Текущий base_generation (G). Нужен для dead_since_gen при освобождении чанков.
     [[nodiscard]] virtual uint64_t base_generation() const = 0;
 
-    // ФС переведена в read-only (CAS-конфликт, SPEC 7.1 шаг 4, или монтирование с --ro).
+    // ФС переведена в read-only (CAS-конфликт или монтирование с --ro).
     // Vfs на любые изменения отвечает EROFS.
     [[nodiscard]] virtual bool read_only() const = 0;
 };

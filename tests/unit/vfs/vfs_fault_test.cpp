@@ -1,4 +1,4 @@
-// Vfs: инъекция сбоев Store на шагах SPEC 8.1 и 8.2 — транзиентные и постоянные ошибки
+// Vfs: инъекция сбоев Store на шагах записи и чтения — транзиентные и постоянные ошибки
 // заливки, «падение» до и после put_chunk с перезапуском, таймаут чтения, порча чанка.
 
 #include <fcntl.h>
@@ -129,7 +129,7 @@ TEST_P(VfsCrash, DataSurvivesCrashDuringUpload) {
     EXPECT_TRUE(env.accounting_ok());
     env.restart();
     EXPECT_EQ(env.read_all(f), data);
-    // Сироты остаются только в журнале (их убирает монтирование, SPEC 7.2 шаг 7).
+    // Сироты остаются только в журнале (их убирает монтирование).
     for (const auto& rec : env.state->list_uploads()) {
         EXPECT_FALSE(rec.msg_id.has_value());
     }
@@ -232,7 +232,7 @@ TEST_F(VfsFaults, CommitFailureMakesFsyncFail) {
     v().sync();
 }
 
-// --- sync_timeout (SPEC 7.3, 10.2): без сети fsync и размонтирование не ждут вечно ---
+// --- sync_timeout: без сети fsync и размонтирование не ждут вечно ---
 
 TEST_F(VfsFaults, FsyncTimesOutWithoutNetworkAndUploadsResumeAfter) {
     VfsOptions o = fast_options();

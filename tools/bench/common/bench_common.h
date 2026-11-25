@@ -1,6 +1,6 @@
 #pragma once
 
-// Общая обвязка экспериментов: часы, статистика (медиана, минимум, максимум — SPEC 17.2),
+// Общая обвязка экспериментов: часы, статистика (медиана, минимум, максимум),
 // CSV, временная ФС на LocalDirStore (init_fs + mount_fs) и описание окружения.
 
 #include <chrono>
@@ -79,7 +79,7 @@ std::string cell(const char* v);
 uint64_t dir_bytes(const fs::path& dir);
 
 // ФС в каталоге root: канал root/channel (LocalDirStore), профиль root/data, keyfile.
-// Параметры init — как в SPEC 12.2 (значения по умолчанию InitOptions).
+// Параметры init — значения по умолчанию InitOptions.
 struct ScratchFs {
     fs::path root;
     fs::path keyfile;
@@ -100,7 +100,7 @@ struct ScratchFs {
     [[nodiscard]] uint64_t message_size(int64_t msg_id) const;
 };
 
-// Монтирование цепочки канала на пустой профиль (SPEC 7.2, «локального индекса нет»).
+// Монтирование цепочки канала на пустой профиль (случай «локального индекса нет»).
 meta::MountOptions fresh_mount_options(const meta::KeySource& key);
 
 // Текст окружения для отчёта: дата и время, CPU, ядро, ФС каталога work, тип сборки.

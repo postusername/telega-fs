@@ -1,6 +1,6 @@
 #pragma once
 
-// Состояние ФС для `telega-fs status` и команды `status` управляющего сокета (SPEC 12.3, 12.4).
+// Состояние ФС для `telega-fs status` и команды `status` управляющего сокета.
 //
 // Источник один и тот же в обоих режимах: state.sqlite, открытый ТОЛЬКО на чтение отдельным
 // соединением (WAL позволяет читать рядом с писателем смонтированного процесса и не требует
@@ -31,10 +31,10 @@ struct FsStatus {
     bool force_snapshot = false;  // следующий коммит — снимок
     bool clean_shutdown = true;  // false: прошлый сеанс завершился нечисто (или идёт монтирование)
     size_t pending_patchsets = 0;  // забраны из сессии, ещё не закоммичены
-    // Overlay: грязные чанки (SPEC 6.4, 8.3).
+    // Overlay: грязные чанки.
     size_t dirty_chunks = 0;
     size_t dirty_inodes = 0;
-    uint64_t dirty_bytes = 0;  // сумма длин staging-файлов грязных чанков (SPEC 8.3)
+    uint64_t dirty_bytes = 0;  // сумма длин staging-файлов грязных чанков
     size_t open_pack_objects = 0;
     int64_t open_pack_bytes = 0;
     // Очередь заливки. Без монтирования заливки нет: всё грязное ждёт монтирования
@@ -44,7 +44,7 @@ struct FsStatus {
     size_t upload_failed = 0;
     // Только при mounted.
     uint64_t uploaded_chunks = 0;  // залито с монтирования
-    uint64_t deduped_chunks = 0;  // привязано к готовым чанкам без заливки (SPEC 8.1)
+    uint64_t deduped_chunks = 0;  // привязано к готовым чанкам без заливки
     uint64_t staging_used = 0;
     uint64_t staging_limit = 0;
     uint64_t commits = 0;  // коммитов с монтирования

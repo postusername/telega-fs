@@ -1,6 +1,11 @@
 #include <CLI/CLI.hpp>
 #include <nlohmann/json.hpp>
+#ifndef TELEGA_FS_HAVE_TDLIB
+#error "TELEGA_FS_HAVE_TDLIB must be defined by CMake (0 or 1)"
+#endif
+#if TELEGA_FS_HAVE_TDLIB
 #include <td/telegram/td_json_client.h>
+#endif
 
 #include <cstdlib>
 #include <exception>
@@ -15,10 +20,13 @@
 #include "app/maint_cmds.h"
 #include "app/tg_session.h"
 #include "app/version.h"
+#if TELEGA_FS_HAVE_TDLIB
 #include "td/tdjson_transport.h"
+#endif
 
 namespace {
 
+#if TELEGA_FS_HAVE_TDLIB
 // Версия TDLib через синхронный td_execute: клиент и сеть для этого не нужны.
 std::string tdlib_version() {
     const char* raw = td_execute(R"({"@type":"getOption","name":"version"})");
@@ -32,13 +40,13 @@ std::string tdlib_version() {
     return reply.value("value", "unknown");
 }
 
-// Настоящий транспорт TDLib (SPEC 10.1, 15.4): единственное место, где создаётся
+// Настоящий транспорт TDLib: единственное место, где создаётся
 // TdJsonTransport. Лог TDLib идёт в файл в data-каталоге профиля.
 std::shared_ptr<telega::td::TdTransport> make_tdjson_transport(
     const std::filesystem::path& log_file) {
     auto transport = std::make_shared<telega::td::TdJsonTransport>();
     std::string error;
-    // Уровень лога TDLib: по умолчанию 1 (SPEC 10.1). Для диагностического прогона его поднимает
+    // Уровень лога TDLib: по умолчанию 1. Для диагностического прогона его поднимает
     // TELEGA_FS_TDLIB_LOG_VERBOSITY (0..5; 4 — отладка загрузок, лог файла TDLib растёт быстро).
     int verbosity = 1;
     // NOLINTNEXTLINE(concurrency-mt-unsafe): читается один раз при старте, до потоков
@@ -52,6 +60,17 @@ std::shared_ptr<telega::td::TdTransport> make_tdjson_transport(
     }
     return transport;
 }
+#else
+// Сборка без TDLib (TELEGA_FS_WITH_TDLIB=OFF): работают только профили с store = "local".
+std::string tdlib_version() { return "none"; }
+
+std::shared_ptr<telega::td::TdTransport> make_tdjson_transport(
+    const std::filesystem::path& /*log_file*/) {
+    throw std::runtime_error(
+        "this telega-fs is built without TDLib: only profiles with store = \"local\" work "
+        "(rebuild with -DTELEGA_FS_WITH_TDLIB=ON)");
+}
+#endif
 
 int run(int argc, char** argv) {
     telega::app::set_transport_factory(make_tdjson_transport);

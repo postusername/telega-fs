@@ -1,6 +1,6 @@
 #pragma once
 
-// Транспорт TDLib (SPEC 10.1): тонкая обёртка над td_create_client_id / td_send / td_receive /
+// Транспорт TDLib: тонкая обёртка над td_create_client_id / td_send / td_receive /
 // td_execute. Всё, что выше (TdRuntime, TdClient, авторизация), работает только через этот
 // интерфейс и поэтому тестируется на фейке без TDLib. Настоящая реализация — telega_tdjson.
 

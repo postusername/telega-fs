@@ -132,8 +132,8 @@ TEST_F(StateStoreTest, DirtyChunkVersionContinuesAfterReopen) {
     EXPECT_GT(state_->upsert_dirty_chunk(7, 0, "c", 3), last + 10);
 }
 
-// Схема M2 (open_pack без added_ns, нет read_cache): rw-открытие мигрирует, --ro (migrate = false)
-// не меняет файл и не ломается на старой схеме (SPEC 7.2).
+// Старая схема (open_pack без added_ns, нет read_cache): rw-открытие мигрирует, --ro (migrate =
+// false) не меняет файл и не ломается на старой схеме.
 class StateStoreMigration : public StateStoreTest {
   protected:
     void downgrade() {
@@ -169,7 +169,7 @@ TEST_F(StateStoreMigration, ReadOnlyOpenDoesNotChangeTheFile) {
 TEST_F(StateStoreMigration, ReadWriteOpenMigratesOnceAndLaterOpensDoNotWrite) {
     downgrade();
     state_ = std::make_unique<StateStore>(path());
-    EXPECT_TRUE(state_->list_open_pack().empty());  // M2: строки open_pack пересозданы пустыми
+    EXPECT_TRUE(state_->list_open_pack().empty());  // строки open_pack пересозданы пустыми
     state_->upsert_open_pack({4, 1, 10, 7});
     reopen();
     ASSERT_EQ(state_->list_open_pack().size(), 1U);
@@ -269,9 +269,9 @@ TEST_F(StateStoreTest, ReadCacheTableExists) {
     EXPECT_EQ(st.column_int64(0), 1);
 }
 
-// SPEC 6.4: state.sqlite со схемой M2 (open_pack со столбцом off, без read_cache) при открытии
+// state.sqlite со старой схемой (open_pack со столбцом off, без read_cache) при открытии
 // получает новую open_pack и read_cache; остальные таблицы не меняются.
-TEST_F(StateStoreTest, SchemaOfM2IsMigrated) {
+TEST_F(StateStoreTest, SchemaWithoutReadCacheIsMigrated) {
     state_->set_int(state_key::base_generation, 9);
     state_->upsert_dirty_chunk(4, 0, "4-0", 77);
     state_.reset();
@@ -298,7 +298,7 @@ TEST_F(StateStoreTest, SchemaOfM2IsMigrated) {
     EXPECT_EQ(st.column_int64(0), 0);
 }
 
-// Шаг 8 из SPEC 7.1: всё одной транзакцией, сбой посередине не оставляет следов.
+// Шаг 8 коммита: всё одной транзакцией, сбой посередине не оставляет следов.
 TEST_F(StateStoreTest, TransactionIsAtomic) {
     state_->reset_chain_to_snapshot(10, 1000);
     const int64_t seq = state_->append_pending(bytes_of("p"));

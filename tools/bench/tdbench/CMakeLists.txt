@@ -1,4 +1,4 @@
-# tgfs-bench: замеры через TdClient против тестового DC (SPEC 17.2). Линкуется с TDLib.
+# tgfs-bench: замеры через TdClient против боевых серверов Telegram. Линкуется с TDLib.
 # Общая обвязка (учётные данные, state-dir, вход аккаунта) — в tgfs_bench_td, подкоманды
 # экспериментов добавляются отдельными файлами в executable tgfs-bench.
 

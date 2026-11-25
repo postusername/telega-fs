@@ -20,7 +20,7 @@ namespace telega::meta {
 
 namespace {
 
-// Схема ровно как в SPEC 6.2 (PRAGMA выставляет Db::open).
+// Схема index.sqlite (PRAGMA выставляет Db::open).
 constexpr std::string_view kSchema = R"sql(
 CREATE TABLE meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 
@@ -234,7 +234,7 @@ MetaStore::MetaStore(std::filesystem::path path, DirtyHook dirty_hook)
         throw IndexCorrupt("unsupported index format_version " +
                            std::to_string(params.format_version));
     }
-    // SPEC 6.6: WAL не остаётся размером с пик, пока снимок держит читательскую транзакцию.
+    // WAL не остаётся размером с пик, пока снимок держит читательскую транзакцию.
     writer_->exec("PRAGMA journal_size_limit = " + std::to_string(kJournalSizeLimit));
     session_ = std::make_unique<Session>(*writer_);
 }
@@ -479,7 +479,7 @@ void MetaStore::build_from_chain(const std::filesystem::path& snapshot_file,
                                    std::filesystem::copy_options::overwrite_existing);
         {
             OpenOptions options;
-            options.foreign_keys = false;  // SPEC 6.6: патчи применяются с выключенными FK
+            options.foreign_keys = false;  // патчи применяются с выключенными FK
             options.wal = false;  // в WAL переводим после проверки
             Db db = Db::open(tmp, options);
             {

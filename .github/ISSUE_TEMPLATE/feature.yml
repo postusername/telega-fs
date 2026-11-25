@@ -1,0 +1,17 @@
+name: Предложение
+description: Новая возможность или изменение поведения
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую задачу это решает
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Что предлагаете
+      description: Как это выглядит для пользователя и как ляжет в docs/SPEC.md (пара абзацев). Если меняются параметры конфигурации — какой эксперимент их обоснует.
+    validations:
+      required: true

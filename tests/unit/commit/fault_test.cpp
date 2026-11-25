@@ -1,4 +1,4 @@
-// Инъекция сбоев (SPEC 7.3, 14): падение до и после каждого шага коммита, который трогает
+// Инъекция сбоев: падение до и после каждого шага коммита, который трогает
 // Store, затем «перезапуск» — монтирование на том же локальном каталоге и на пустом.
 // Плюс property-тест: случайные операции и коммиты со сбоями, канал всегда равен состоянию
 // последнего успешного коммита.
@@ -363,7 +363,7 @@ TEST_P(CommitProperty, ChannelEqualsLastSuccessfulCommit) {
 
 INSTANTIATE_TEST_SUITE_P(Seeds, CommitProperty, ::testing::Values(1, 2, 3, 4, 5, 6));
 
-// --- неподтверждённый pin и размонтирование (SPEC 7.1, 7.2) ---
+// --- неподтверждённый pin и размонтирование ---
 
 class Unconfirmed : public CommitEnv {
   protected:
@@ -440,7 +440,7 @@ TEST_F(Unconfirmed, UnmountAfterPinnedSnapshotKeepsForceSnapshotAcrossReplay) {
     EXPECT_TRUE(has_name(*fs, "y"));
 }
 
-// SPEC 7.2: неудачный финальный коммит (нет сети) — это ошибка размонтирования, но разбор
+// Неудачный финальный коммит (нет сети) — это ошибка размонтирования, но разбор
 // доводится до конца: force_snapshot = 1 строго до clean_shutdown = 1, фоновый поток остановлен.
 TEST_F(Unconfirmed, UnmountReportsFailedFinalCommitAfterTeardown) {
     init();
@@ -558,7 +558,7 @@ TEST_F(Unconfirmed, ForceLocalCasOverrideIsResetWhenUnconfirmedCommitIsFinished)
     EXPECT_EQ(remote_state(), normalized(test::dump_of(*fa)));
 }
 
-// --- промежуточный забор патча (SPEC 6.6, 7.2) ---
+// --- промежуточный забор патча ---
 
 // Блоб головы — наш, шаг 8 упал, потом процесс умер. Пока pin неподтверждён, промежуточный забор
 // ничего не дописывает в pending, поэтому патч блоба равен склейке pending, и монтирование

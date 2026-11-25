@@ -487,7 +487,7 @@ TEST_F(IndexOps, GcCandidatesAndChunkRows) {
     });
 }
 
-// SPEC 6.5: уплотнению подлежат живые пакеты с live_bytes / plain_size строго ниже порога;
+// Уплотнению подлежат живые пакеты с live_bytes / plain_size строго ниже порога;
 // мёртвые пакеты (refcount = 0) убирает уборка, позиционные чанки не уплотняются.
 TEST_F(IndexOps, CompactionCandidatesAndExtents) {
     const int64_t f1 = create(kRootIno, "f1");
@@ -546,7 +546,7 @@ TEST_F(IndexOps, FindChunkByMacOnlyPositional) {
 }
 
 TEST_F(IndexOps, FindChunkByMacIgnoresDeadChunks) {
-    // Мёртвый чанк (refcount = 0) не находится: его сообщение могла удалить уборка (SPEC 8.1).
+    // Мёртвый чанк (refcount = 0) не находится: его сообщение могла удалить уборка.
     const int64_t f = create(kRootIno, "dedup");
     w([&](Db& db) {
         const int64_t a = new_chunk(db, 100, kGen);
@@ -559,7 +559,7 @@ TEST_F(IndexOps, FindChunkByMacIgnoresDeadChunks) {
 }
 
 TEST_F(IndexOps, FindChunkByMacIgnoresZeroMac) {
-    // fsck --repair ставит битым чанкам нулевой content_mac (SPEC 12.3): они не находятся.
+    // fsck --repair ставит битым чанкам нулевой content_mac: они не находятся.
     w([&](Db& db) {
         const int64_t a = new_chunk(db, 100, kGen);
         Stmt st{db, "UPDATE chunks SET content_mac = zeroblob(32) WHERE chunk_id = ?"};

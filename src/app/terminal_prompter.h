@@ -1,6 +1,6 @@
 #pragma once
 
-// Интерактивный подсказчик входа для `telega-fs login` (SPEC 10.1, 10.3, 12.3): телефон, код с
+// Интерактивный подсказчик входа для `telega-fs login`: телефон, код с
 // выводом способа доставки и повторной отправкой по пустой строке, пароль 2FA без эха, имя при
 // регистрации, токен бота без эха, QR-код.
 
@@ -27,7 +27,7 @@ class TerminalPrompter final : public td::AuthPrompter {
         DrawQr draw;                  // пусто — python3 -m qrcode по stdin
         Sleep sleep;                  // пусто — std::this_thread::sleep_for
         std::ostream* out = nullptr;  // сообщения; nullptr — std::cerr
-        // FLOOD_WAIT дольше этого не ждём (SPEC 10.2 не задаёт, как у tgfs-bench: 30 минут).
+        // FLOOD_WAIT дольше этого не ждём (как у tgfs-bench: 30 минут).
         std::chrono::seconds max_flood_wait{30 * 60};
     };
 

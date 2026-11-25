@@ -1,7 +1,7 @@
 #pragma once
 
-// Сессия TDLib в приложении (SPEC 10.1, 10.3): сборка setTdlibParameters из профиля, TdRuntime,
-// авторизация и закрытие. Библиотека не линкуется с TDLib (SPEC 15.4): настоящий транспорт
+// Сессия TDLib в приложении: сборка setTdlibParameters из профиля, TdRuntime,
+// авторизация и закрытие. Библиотека не линкуется с TDLib: настоящий транспорт
 // (td_json_client) приходит из main через set_transport_factory, в тестах — фейк.
 
 #include <chrono>
@@ -20,7 +20,7 @@
 
 namespace telega::app {
 
-// Создаёт транспорт и направляет лог TDLib в log_file (SPEC 10.1: setLogStream, 16 МиБ, уровень
+// Создаёт транспорт и направляет лог TDLib в log_file (setLogStream, 16 МиБ, уровень
 // 1). Зовётся один раз на процесс, до первого клиента.
 using TransportFactory =
     std::function<std::shared_ptr<td::TdTransport>(const std::filesystem::path& log_file)>;
@@ -50,7 +50,7 @@ class NoInteractionPrompter final : public td::AuthPrompter {
 };
 
 // Один клиент TDLib профиля. Деструктор закрывает клиента (close) и только потом останавливает
-// TdRuntime (SPEC 10.1), затирает ключ и api_hash.
+// TdRuntime, затирает ключ и api_hash.
 class TgSession {
   public:
     TgSession(const ProfilePaths& paths, bool use_test_dc, const ApiCredentials& api,

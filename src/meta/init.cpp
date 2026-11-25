@@ -60,7 +60,7 @@ class TrackingStore final : public store::Store {
     std::optional<int64_t> uploaded_;
 };
 
-// Читать голову, пока она пуста, но не дольше окна (кэш TDLib, SPEC 2: после pin голова может
+// Читать голову, пока она пуста, но не дольше окна (кэш TDLib: после pin голова может
 // до полутора минут читаться пустой). Окно 0 — одно чтение. Ошибка чтения пробрасывается.
 std::optional<store::HeadInfo> read_head_over_window(store::Store& store,
                                                      const InitOptions& options,
@@ -88,7 +88,7 @@ enum class RollbackVerdict : uint8_t {
     unknown,  // чужая голова или чтение не удалось: ключи нужнее, ничего не трогаем
 };
 
-// Что с каналом после сбоя первого коммита (SPEC 12.3). Блоб не залит — pin невозможен.
+// Что с каналом после сбоя первого коммита. Блоб не залит — pin невозможен.
 RollbackVerdict judge_failed_commit(store::Store& store, std::optional<int64_t> uploaded,
                                     const InitOptions& options) {
     if (!uploaded) {
@@ -130,7 +130,7 @@ InitProfileState inspect_profile_for_init(const FsPaths& paths) {
         return InitProfileState::fresh;
     }
     // Keyring с ФС. init пишет его раньше pin, поэтому такой профиль мог остаться от
-    // прерванного init (SPEC 12.3): повторить можно, пока ФС ни разу не закоммичена.
+    // прерванного init: повторить можно, пока ФС ни разу не закоммичена.
     if (std::filesystem::exists(paths.state_db())) {
         try {
             StateStore state{paths.state_db()};
@@ -149,8 +149,8 @@ InitProfileState inspect_profile_for_init(const FsPaths& paths) {
 
 InitResult init_fs(store::Store& store, const FsPaths& paths, const InitOptions& options) {
     crypto::init();
-    // Keyring, созданный login до init (SPEC 11, «Keyring до init»): без ФС. init дописывает
-    // в него ФС тем же KEK. Keyring с ФС и незакоммиченной ФС — прерванный init (SPEC 12.3).
+    // Keyring, созданный login до init: без ФС. init дописывает
+    // в него ФС тем же KEK. Keyring с ФС и незакоммиченной ФС — прерванный init.
     const InitProfileState profile_state = inspect_profile_for_init(paths);
     const bool resuming = profile_state == InitProfileState::resumable;
     std::optional<crypto::KeyringFile> existing;
@@ -266,9 +266,9 @@ InitResult init_fs(store::Store& store, const FsPaths& paths, const InitOptions&
     } catch (...) {
         // Если ошибка пришла уже после pin (set_head с потерянным ответом или сбой шага 8),
         // в канале закреплён наш блоб, и без keyring с базами ключ к нему потерян. Тогда
-        // локальное состояние остаётся, и это успех: монтирование узнаёт свой блоб (G_r = G_l + 1,
-        // SPEC 7.2) и доделывает шаг 8. Откат только если блоб не залит или голова пуста всё
-        // окно кэша TDLib (SPEC 12.3). Чужая голова или сбой проверки — ключи нужнее, остаётся.
+        // локальное состояние остаётся, и это успех: монтирование узнаёт свой блоб (G_r = G_l + 1)
+        // и доделывает шаг 8. Откат только если блоб не залит или голова пуста всё
+        // окно кэша TDLib. Чужая голова или сбой проверки — ключи нужнее, остаётся.
         if (!committed) {
             const RollbackVerdict verdict = judge_failed_commit(store, tracked.uploaded(), options);
             if (verdict == RollbackVerdict::pinned) {

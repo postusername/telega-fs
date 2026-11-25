@@ -34,7 +34,7 @@ int status_impl(const StatusArgs& args) {
     const Loaded l = load_profile(args.global);
     FsStatus status;
     // Смонтирована ли ФС, решает сокет: оставшийся от упавшего процесса файл отвечает
-    // ECONNREFUSED и считается «не смонтирована» (SPEC 12.4).
+    // ECONNREFUSED и считается «не смонтирована».
     const auto reply = ctl::call(l.paths.ctl_sock(), "status", std::chrono::seconds(30));
     if (reply) {
         if (!reply->ok) {
@@ -42,7 +42,7 @@ int status_impl(const StatusArgs& args) {
         }
         status = status_from_json(reply->result);
     } else {
-        // Без монтирования: state.sqlite только на чтение, без lock (SPEC 12.3).
+        // Без монтирования: state.sqlite только на чтение, без lock.
         status = read_state_status(l.paths.state_db(), l.paths.staging());
     }
     if (args.json) {
@@ -57,7 +57,7 @@ int status_impl(const StatusArgs& args) {
 
 int sync_impl(const SyncArgs& args) {
     const Loaded l = load_profile(args.global);
-    // Без ограничения по времени: сервер сам ждёт не дольше sync_timeout (SPEC 10.2).
+    // Без ограничения по времени: сервер сам ждёт не дольше sync_timeout.
     const auto reply = ctl::call(l.paths.ctl_sock(), "sync");
     if (!reply) {
         throw CommandError("profile '" + args.global.profile +
@@ -84,7 +84,7 @@ int gc_impl(const GcArgs& args) {
     }
     setup_logging(args.global.verbose, ::isatty(STDERR_FILENO) != 0);
 
-    // lock держит смонтированный процесс: при нём gc отказывается (SPEC 12.3).
+    // lock держит смонтированный процесс: при нём gc отказывается.
     std::unique_ptr<MaintSession> session;
     try {
         session = std::make_unique<MaintSession>(args.global);
@@ -94,13 +94,13 @@ int gc_impl(const GcArgs& args) {
                            "for the other maintenance command) first");
     }
 
-    // ФС без FUSE и Vfs: ключи разблокированы, индекс выбран по таблице 7.2, коммитер готов
-    // (SPEC 6.5, «Уплотнение»: нужны только MetaStore, state.sqlite, Store и коммит).
+    // ФС без FUSE и Vfs: ключи разблокированы, индекс выбран так же, как при монтировании, коммитер
+    // готов (уплотнению нужны только MetaStore, state.sqlite, Store и коммит).
     store::Store& store = session->open_store(false);
     meta::MountOptions mo;
     mo.key = session->key();
     if (p.store == StoreKind::telegram) {
-        // Кэш TDLib может до минуты скрывать голову после размонтирования (SPEC 2).
+        // Кэш TDLib может до минуты скрывать голову после размонтирования.
         mo.stale_head_window = mo.commit.cas_retry_window;
         mo.stale_head_period = mo.commit.cas_retry_period;
     }
@@ -112,13 +112,13 @@ int gc_impl(const GcArgs& args) {
     mo.commit.retain_generations = p.retain_generations;
     mo.start_background = false;  // коммиты только явные
     std::unique_ptr<meta::MountedFs> mounted = meta::mount_fs(store, session->paths(), mo);
-    session->start_read_cache();  // уплотнение скачивает пакеты (SPEC 8.2)
+    session->start_read_cache();  // уплотнение скачивает пакеты
     session->wipe_secrets();
     wipe(mo.key.passphrase);
 
     bool failed = false;
     try {
-        // Обычная отложенная уборка (SPEC 7.4) с сегодняшним retain_generations.
+        // Обычная отложенная уборка с сегодняшним retain_generations.
         const auto gc = mounted->committer().collect_garbage();
         std::cout << "gc: deleted " << gc.chunks_deleted << " chunk message(s) and "
                   << gc.blobs_deleted << " old index blob(s)\n";
@@ -146,7 +146,7 @@ int gc_impl(const GcArgs& args) {
             std::cout << (r.committed ? ", committed" : ", nothing to commit") << '\n';
             if (r.committed) {
                 // Старые пакеты стали мёртвыми только в новом поколении: их сообщения уйдут
-                // уборкой после retain_generations (SPEC 7.4); шаг 9 коммита уже отработал.
+                // уборкой после retain_generations; уборка этого коммита уже отработала.
                 std::cout << "compacted packs are deleted from the channel after "
                           << p.retain_generations << " more generation(s) (retain_generations)\n";
             }

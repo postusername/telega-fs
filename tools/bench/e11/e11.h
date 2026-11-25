@@ -1,6 +1,6 @@
 #pragma once
 
-// E11: снимок индекса без блокировки записи (SPEC 17.14). Два прогона: snapshots (варианты
+// E11: снимок индекса без блокировки записи. Два прогона: snapshots (варианты
 // (a), (b), (c) на корпусах C1 и C4 с непрерывным писателем) и probe (проверка тонких мест
 // backup API и WAL, от которых зависит корректность варианта (b)).
 
@@ -18,12 +18,12 @@ struct Options {
     std::filesystem::path work;  // временные данные (не в дереве репозитория)
     std::filesystem::path out;     // CSV
     std::filesystem::path c1_dir;  // распакованный C1 (corpora/fetch-c1.sh)
-    int repeats = 3;               // повторы замеров (SPEC 17.2: не меньше 3)
+    int repeats = 3;               // повторы замеров (не меньше 3)
     uint64_t seed = 20261122;
     std::vector<std::string> corpora{"c1", "c4-100000", "c4-1000000"};
     std::vector<std::string> variants{"a", "b", "bs", "c"};
-    int64_t take_rows = 2000;  // patch_take_rows (SPEC 6.6): порог промежуточного забора
-    int writer_rows = 10;  // строк на транзакцию писателя
+    int64_t take_rows = 2000;  // patch_take_rows: порог промежуточного забора
+    int writer_rows = 10;      // строк на транзакцию писателя
     bool fair = false;  // писатель уступает коммиту и забору (имитация честной блокировки)
     int writer_pause_us = 0;  // пауза между транзакциями писателя (0 = непрерывно)
     int pre_ms = 1000;   // окно «без снимка» перед первым снимком

@@ -1,6 +1,6 @@
 #pragma once
 
-// E1: размеры патчей дельта-журнала (SPEC 17.4). Три прогона: c1 (нагрузки 1–5 на корпусе C1),
+// E1: размеры патчей дельта-журнала. Три прогона: c1 (нагрузки 1–5 на корпусе C1),
 // c4 (индекс C4, цепочки дельт и монтирование), stress (время забора патча от числа строк).
 
 #include <cstdint>
@@ -14,7 +14,7 @@ struct Options {
     std::filesystem::path work;  // временные данные (не в дереве репозитория)
     std::filesystem::path out;     // CSV
     std::filesystem::path c1_dir;  // распакованный C1 (corpora/fetch-c1.sh)
-    int repeats = 3;               // повторы замеров (SPEC 17.2: не меньше 3)
+    int repeats = 3;               // повторы замеров (не меньше 3)
     int cycles = 3;  // циклы нагрузок 1–5 в прогонах checkpoint_ratio
     uint64_t seed = 20261117;
     std::vector<int64_t> c4_sizes{100'000, 1'000'000};

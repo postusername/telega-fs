@@ -1,5 +1,5 @@
 // Интеграционные тесты управляющего сокета и обслуживающих команд status, sync, gc
-// (SPEC 7.3, 7.4, 12.3, 12.4) на LocalDirStore: настоящий бинарник telega-fs. Без /dev/fuse
+// на LocalDirStore: настоящий бинарник telega-fs. Без /dev/fuse
 // пропускаются (GTEST_SKIP).
 
 #include <fcntl.h>
@@ -327,7 +327,7 @@ TEST_F(CtlTest, SyncWhenNotMountedAndOnReadOnlyMount) {
     }
     auto m = e.mount({"--ro"});
     r = e.run({"sync"});
-    EXPECT_TRUE(r.exit.ok()) << "sync on --ro succeeds: nothing to save (SPEC 7.3)\n" << r.output;
+    EXPECT_TRUE(r.exit.ok()) << "sync on --ro succeeds: nothing to save\n" << r.output;
     const json st = status_json();
     EXPECT_TRUE(st["mounted"].get<bool>());
     EXPECT_TRUE(st["read_only"].get<bool>());

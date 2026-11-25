@@ -53,7 +53,7 @@ int fsck_impl(const FsckArgs& args) {
     meta::MountOptions mo;
     mo.key = session.key();
     mo.read_only = !args.repair;
-    mo.maintenance = true;  // fsck ничего не удаляет в канале (SPEC 12.3)
+    mo.maintenance = true;  // fsck ничего не удаляет в канале
     mo.start_background = false;
     if (p.store == StoreKind::telegram) {
         mo.stale_head_window = mo.commit.cas_retry_window;

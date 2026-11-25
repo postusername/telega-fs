@@ -19,7 +19,7 @@ using detail::uc;
 
 namespace {
 
-// Раскладка заголовка чанка (SPEC 5).
+// Раскладка заголовка чанка.
 constexpr std::array<char, 8> kMagic{'T', 'G', 'F', 'S', 'C', 'H', 'K', '1'};
 constexpr uint8_t kVersion = 1;
 constexpr size_t kOffVersion = 8;

@@ -1,14 +1,14 @@
-// e10: чтение и readahead (SPEC 17.13), боевые серверы, режим бота. Канал создаёт пользователь
+// e10: чтение и readahead, боевые серверы, режим бота. Канал создаёт пользователь
 // (setup, сообщений от пользователя нет), всю нагрузку несёт бот в отдельном каталоге сессии
-// <state-dir>/bot-e10. Документы — 32 чанка по 8 МиБ в формате SPEC 5 (зашифрованные, содержимое
+// <state-dir>/bot-e10. Документы — 32 чанка по 8 МиБ в формате чанка (зашифрованные, содержимое
 // по seed), альбомами.
 //
 //   tgfs-bench e10 setup            пользователь создаёт канал и добавляет бота; бот заливает 32
 //   чанка tgfs-bench e10 run              серии (возобновляемо, запускать в фоне) tgfs-bench e10
-//   status           состояние серий tgfs-bench e10 restart-check    внутренняя: проверки пункта 7
+//   status           состояние серий tgfs-bench e10 restart-check    внутренняя: проверки серии p7
 //   в новом процессе tgfs-bench e10 teardown         удалить канал (пользователь) и каталоги сессии
 //
-// Серии (одна серия — один замер пункта 17.13, повторы идут кругами по пунктам):
+// Серии (одна серия — один замер E10, повторы идут кругами по пунктам):
 //   p1-<asc|desc|equal>-rN          приоритет между файлами
 //   p2-<control|raise|raise_sync>-rN  повышение приоритета
 //   p3-<from0|from3m>-rN            асинхронный ход, проверка префикса по тегам сегментов
@@ -115,7 +115,7 @@ struct E10Options {
     int download_concurrency = 4;
     int series_pause_seconds = 5;
     int album_pause_seconds = 60;
-    // Внутренние (дочерний процесс пункта 7).
+    // Внутренние (дочерний процесс серии p7).
     std::string series;
     int rep = 1;
     bool inherit_lock = false;
@@ -1476,7 +1476,7 @@ int spawn_wait(const std::vector<std::string>& args) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
-// Проверки пункта 7 в новом процессе с той же БД TDLib.
+// Проверки серии p7 в новом процессе с той же БД TDLib.
 void restart_check(BenchAccount& bot, Out& out, const BenchOptions& options, int64_t chat_id,
                    const std::string& id, int rep, const Crypto& crypto,
                    const std::vector<Doc>& docs) {
@@ -2010,7 +2010,7 @@ void cmd_setup(BenchEnv& env, const BenchOptions& options, const E10Options& e10
         throw std::runtime_error("the bot does not see the channel");
     }
 
-    // Заливка: 32 чанка по 8 МиБ в формате SPEC 5, альбомами по 10 с паузой (лимит по байтам).
+    // Заливка: 32 чанка по 8 МиБ в формате чанка, альбомами по 10 с паузой (лимит по байтам).
     fs::create_directories(names.docs);
     td::Json docs = state["docs"];
     std::vector<Doc> have;
@@ -2200,8 +2200,7 @@ int cmd_restart_check(BenchEnv& env, const BenchOptions& options, const E10Optio
 }  // namespace
 
 void add_e10_command(CLI::App& app, const BenchOptions& options, int* exit_code) {
-    auto* cmd =
-        app.add_subcommand("e10", "Experiment E10: reads and readahead, bot mode (SPEC 17.13)");
+    auto* cmd = app.add_subcommand("e10", "Experiment E10: reads and readahead, bot mode");
     cmd->require_subcommand(1);
     auto e10 = std::make_shared<E10Options>();
     e10->out = default_out_dir("11-e10-read-readahead");
@@ -2211,7 +2210,7 @@ void add_e10_command(CLI::App& app, const BenchOptions& options, int* exit_code)
     cmd->add_option("--rights", e10->rights, "Bot rights set")->capture_default_str();
     auto* reps_opt =
         cmd->add_option("--reps", e10->reps, "Repeats of every series")->capture_default_str();
-    cmd->add_option("--items", e10->items, "Items of SPEC 17.13 to run (comma separated)")
+    cmd->add_option("--items", e10->items, "Items of E10 to run (comma separated)")
         ->capture_default_str();
     auto* seq_opt = cmd->add_option("--seq-mib", e10->seq_mib, "Sequential read size, MiB (item 6)")
                         ->capture_default_str();

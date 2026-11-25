@@ -1,4 +1,4 @@
-// CommitManager (SPEC 6.6, 7.1, 7.4) и init (SPEC 12.3): вид блоба, заголовок, склейка
+// CommitManager и init: вид блоба, заголовок, склейка
 // pending, неудачный снимок, CAS, фоновый поток, уборка, замеры.
 
 #include <gtest/gtest.h>
@@ -224,7 +224,7 @@ TEST_F(Commit, InitWithPassphrase) {
     EXPECT_EQ(h.kdf.opslimit, crypto_pwhash_OPSLIMIT_MIN);
 }
 
-// --- вид блоба (SPEC 6.6) ---
+// --- вид блоба ---
 
 TEST_F(Commit, DeltaHeaderAndBody) {
     auto fs = init_and_mount();
@@ -394,9 +394,9 @@ TEST_F(Commit, CasConflictSwitchesToReadOnly) {
     EXPECT_TRUE(fb->committer().read_only());
     EXPECT_EQ(test::must(store_->read_head()).msg_id, head_after_a);
     EXPECT_THROW(fb->committer().commit_now(), CommitError);
-    // Патч B остался в pending: recover --export-dirty (M4) сможет его достать.
+    // Патч B остался в pending: recover --export-dirty сможет его достать.
     EXPECT_EQ(fb->state().list_pending().size(), 1U);
-    // Финальный коммит не удаётся: ошибка после полного разбора (SPEC 7.2).
+    // Финальный коммит не удаётся: ошибка после полного разбора.
     EXPECT_THROW(fb->unmount(), CommitError);
     EXPECT_EQ(fb->state().get_int(state_key::clean_shutdown), 1);
     EXPECT_EQ(fb->state().get_int(state_key::force_snapshot), 1);
@@ -426,7 +426,7 @@ TEST_F(Commit, WritesDuringCommitAreNotLost) {
     committer.join();
     EXPECT_EQ(state_int(*fs, state_key::base_generation), 2);
     EXPECT_EQ(state_int(*fs, state_key::index_dirty), 1);
-    // Запись после забора патча видит поколение коммита в полёте (dead_since_gen, SPEC 7.4).
+    // Запись после забора патча видит поколение коммита в полёте (dead_since_gen).
     EXPECT_EQ(fs->committer().base_generation(), 2U);
     fs->committer().commit_now();
     EXPECT_EQ(state_int(*fs, state_key::base_generation), 3);
@@ -567,7 +567,7 @@ TEST_F(Background, StopWaitsForCommitInFlight) {
     EXPECT_EQ(state_int(*fs, state_key::base_generation), 2);
 }
 
-// --- отложенная уборка (SPEC 7.4) ---
+// --- отложенная уборка ---
 
 TEST_F(Commit, DeadChunkDeletedExactlyAfterRetainGenerations) {
     commit_config_.retain_generations = 2;
@@ -702,7 +702,7 @@ TEST_F(Commit, ReadOnlyMountDoesNotCommit) {
     EXPECT_EQ(head_header().generation, 1U);
 }
 
-// Свойство SPEC 7.4: для каждого из последних retain_generations поколений блоб на месте, а
+// Свойство: для каждого из последних retain_generations поколений блоб на месте, а
 // индекс, собранный из его цепочки, не ссылается на удалённые сообщения чанков.
 TEST_F(Commit, RetentionInvariantRandom) {
     constexpr uint64_t kRetain = 3;
@@ -789,7 +789,7 @@ TEST_F(Commit, RetentionInvariantRandom) {
     }
 }
 
-// --- запись pending вне блокировки и промежуточный забор (SPEC 6.6) ---
+// --- запись pending вне блокировки и промежуточный забор ---
 
 // Хук, на котором тест держит запись патча в pending: pass() входит и ждёт release().
 class Gate {
@@ -1154,7 +1154,7 @@ TEST_F(IntermediateTake, ZeroThresholdDisablesBackgroundTakes) {
     fs->unmount();
 }
 
-// Замер для E1/SPEC 6.6: время под блокировкой на забор 20 000 новых строк. Без промежуточного
+// Замер для E1: время под блокировкой на забор 20 000 новых строк. Без промежуточного
 // забора коммит берёт всё разом, с patch_take_rows = 2000 — не больше порога за раз.
 TEST_F(IntermediateTake, TakeUnderLockIsShorterWithIntermediateTakes) {
     commit_config_.patch_take_rows = 2000;

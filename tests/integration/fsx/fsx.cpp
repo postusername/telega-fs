@@ -1,4 +1,4 @@
-// tgfs-fsx: стресс-тест файловой системы по модели fsx из xfstests (SPEC 14), см. fsx.h.
+// tgfs-fsx: стресс-тест файловой системы по модели fsx из xfstests, см. fsx.h.
 
 #include "fsx.h"
 

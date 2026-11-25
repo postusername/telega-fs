@@ -1,11 +1,10 @@
-// Vfs: восстановление overlay, запечатывание, загрузка чанков, фоновые потоки (SPEC 6.5,
-// 8.1, 10.2).
+// Vfs: восстановление overlay, запечатывание, загрузка чанков, фоновые потоки.
 //
 // Загрузка позиционного чанка (upload_chunk) идёт в три фазы (а позиция ≥ 1 инлайн-файла,
 // пока его позиция 0 ещё в overlay, не загружается вовсе, см. «блокировку» ниже):
 // 1. Под разделяемой полосой inode (запись в файл ждёт, чтение идёт): запомнить version,
-//    посчитать content_mac; если в chunks уже есть такой позиционный чанк (дедупликация,
-//    SPEC 8.1, шаг 2), шифрование и заливка пропускаются, иначе выделить chunk_id и
+//    посчитать content_mac; если в chunks уже есть такой позиционный чанк (дедупликация),
+//    шифрование и заливка пропускаются, иначе выделить chunk_id и
 //    зашифровать staging в tmp/. Снимок согласован: писатели держат полосу исключительно.
 // 2. Без блокировок: upload_started → Store::put_chunk (транзиентные ошибки — повтор
 //    бесконечно с задержкой, постоянные — чанк остаётся в overlay с ошибкой) →
@@ -17,9 +16,9 @@
 //    (если version не изменилась), dirty_attrs и запись журнала. Иначе чанк не нужен:
 //    сообщение удаляется из канала, запись журнала убирается.
 //
-// Дедупликация (SPEC 8.1, шаг 2). Только на живые чанки (refcount > 0): мёртвый не оживляется,
+// Дедупликация. Только на живые чанки (refcount > 0): мёртвый не оживляется,
 // потому что уборка могла уже удалить его сообщение, а строка с refcount = 0 осталась в индексе
-// канала (служебная запись без коммита, SPEC 6.6, 7.4). Поиск в фазе 1 — только подсказка
+// канала (служебная запись без коммита). Поиск в фазе 1 — только подсказка
 // «шифровать не нужно»: он ничего не меняет, поэтому сбой или уход чанка не оставляет ни
 // лишнего refcount, ни записи в upload_journal. Привязка идёт в фазе 3 той же транзакцией, что
 // и экстент: под блокировкой записи MetaStore find_chunk_by_mac и put_extent (refcount++)
@@ -29,9 +28,9 @@
 // обычным путём. После сбоя между транзакциями index.sqlite и state.sqlite (строка
 // dirty_chunks пережила привязку) повторная привязка к тому же чанку не меняет refcount
 // (put_extent: тот же chunk_id).
-// Пакеты не дедуплицируются (SPEC 6.5).
+// Пакеты не дедуплицируются.
 //
-// Порядок позиций инлайн-файла (SPEC 6.2: у инлайн-файла нет экстентов): запись дальше
+// Порядок позиций инлайн-файла (у инлайн-файла нет экстентов): запись дальше
 // позиции 0 переносит его данные в overlay позиции 0, и в индексе остаётся inline_data, пока
 // позиция 0 не применена. Экстент idx ≥ 1 нельзя применить раньше (clear_inline оставил бы
 // индекс без начала файла, и коммит в этом окне зафиксировал бы поколение, которого не было).
@@ -39,17 +38,17 @@
 // позиция в фазе 1 помечается «заблокированной» и уходит без заливки, а когда позиция 0
 // покидает overlay (release_blocked) — ставится в очередь снова.
 //
-// Класс хранения (SPEC 6.5) выбирает seal_file при каждом запечатывании по размеру: инлайн
+// Класс хранения выбирает seal_file при каждом запечатывании по размеру: инлайн
 // (try_seal_inline), пакет (seal_to_pack → PackWriter, если файл не больше pack_threshold и
 // не поместился в инлайн, в том числе при исчерпанном бюджете), иначе позиционный чанк
 // (upload_chunk). Файл меняет класс одной транзакцией индекса: новые данные записываются,
 // старые освобождаются (put_extent, set_inline, clear_inline).
 //
-// Место (SPEC 8.3): зашифрованная копия чанка в tmp/ берётся из StagingBudget целиком, до полосы
+// Место: зашифрованная копия чанка в tmp/ берётся из StagingBudget целиком, до полосы
 // inode, размером полного зашифрованного чанка (из таких аренд и состоит резерв заливки R),
 // после шифрования уменьшается до фактического размера и возвращается, когда tmp-файл удалён.
 //
-// Пустой staging-файл (длина 0) не заливается: SPEC 8.1, позиция без валидных байт — дыра.
+// Пустой staging-файл (длина 0) не заливается: позиция без валидных байт — дыра.
 // Индекс не меняется (экстент, если он был, остаётся: откат не глубже последнего коммита),
 // строка overlay удаляется (resolve_empty_position).
 
@@ -124,7 +123,7 @@ bool Vfs::restore_inline_position(int64_t ino) {
     pwrite_full(fd.get(), *data, 0);
     const auto attrs = overlay_->attrs(ino);
     const int64_t now = now_ns();
-    // Учёт (SPEC 8.3): не больше inline_max, под полосой ждать места нельзя — берётся без
+    // Учёт: не больше inline_max, под полосой ждать места нельзя — берётся без
     // проверки лимита (редкий случай восстановления после сбоя).
     const uint64_t old_len = overlay_->staged({ino, 0});
     if (data->size() > old_len) {
@@ -157,8 +156,8 @@ void Vfs::recover() {
             const auto path = overlay_->path_of({ino, idx});
             if (!std::filesystem::exists(path, ec)) {
                 // Строка пишется долговечно до возврата из write, а staging-файл синхронизируется
-                // только по fsync: после отключения питания строка может пережить файл (SPEC
-                // 8.1). Строка удаляется, позиция снова читается из индекса (откат не глубже
+                // только по fsync: после отключения питания строка может пережить файл.
+                // Строка удаляется, позиция снова читается из индекса (откат не глубже
                 // последнего коммита), ошибка видна в status. Создавать файл заново нельзя:
                 // пустой файл превратил бы закоммиченные данные в нули. dirty_attrs остаются:
                 // размер и mtime — отдельное долговечное состояние, их перенесёт ветка
@@ -228,7 +227,7 @@ void Vfs::recover() {
             }
         }
         const bool dirty = overlay_->has_chunks(ino);
-        // Индекс не должен ссылаться на данные за размером (SPEC 6.2): truncate мог
+        // Индекс не должен ссылаться на данные за размером: truncate мог
         // упасть между overlay и индексом. Если грязные позиции остались, размер в индексе
         // тоже понижается в той же транзакции (как в truncate_locked): иначе до заливки
         // последней из них индекс и коммит в этом окне показывали бы старый больший размер с
@@ -242,7 +241,7 @@ void Vfs::recover() {
                     u.size = attrs->size;
                     u.mtime_ns = attrs->mtime_ns;
                     // ctime = момент изменения индекса: recover --export-dirty по нему находит
-                    // данные, залитые после последнего коммита (SPEC 12.3).
+                    // данные, залитые после последнего коммита.
                     u.ctime_ns = std::max({inode->ctime_ns, attrs->mtime_ns, now_ns()});
                     meta::update_attrs(db, ino, u);
                 } else if (lower_index_size) {
@@ -253,7 +252,7 @@ void Vfs::recover() {
             });
         }
         // Позиция 0 инлайн-файла пропала (потерянный staging-файл), а позиции idx ≥ 1 и
-        // непустой inline_data остались: позиция 0 заново создаётся из inline_data (SPEC 8.1),
+        // непустой inline_data остались: позиция 0 заново создаётся из inline_data,
         // иначе позиции idx ≥ 1 не смогли бы лечь в индекс.
         if (dirty && !overlay_->chunk({ino, 0})) {
             restore_inline_position(ino);
@@ -262,7 +261,7 @@ void Vfs::recover() {
             overlay_->clear_attrs(ino);
         }
     }
-    // Учёт staging пересчитывается по длинам файлов на диске (SPEC 8.3).
+    // Учёт staging пересчитывается по длинам файлов на диске.
     budget_->reset(overlay_->recount_staged());
     scan_external_tmp();
 }
@@ -289,7 +288,7 @@ void Vfs::scan_external_tmp() {
 // --- фоновые потоки ---
 
 uint32_t Vfs::upload_workers() const {
-    constexpr uint64_t kAlbumFactor = 10;  // SPEC 5: документов в альбоме
+    constexpr uint64_t kAlbumFactor = 10;  // документов в альбоме
     constexpr uint64_t kMaxAlbumWorkers = 32;
     const uint64_t base = std::max<uint64_t>(opts_.upload_concurrency, 1);
     if (!store_.gathers_albums()) {
@@ -299,7 +298,7 @@ uint32_t Vfs::upload_workers() const {
 }
 
 void Vfs::start_threads() {
-    // Поток на каждый возможный одновременный put_chunk (SPEC 8.1).
+    // Поток на каждый возможный одновременный put_chunk.
     const uint32_t workers = upload_workers();
     for (uint32_t i = 0; i < workers; ++i) {
         workers_.emplace_back([this] { worker_loop(); });
@@ -466,14 +465,14 @@ void Vfs::set_fatal(const std::string& what) {
     budget_->notify_all();
 }
 
-// --- запечатывание (SPEC 6.5, 8.1) ---
+// --- запечатывание ---
 
 bool Vfs::try_seal_inline(int64_t ino, const Inode& inode, int64_t size) {
     const int64_t own = inode.inline_len.value_or(0);
     const bool fits = meta_.read(
         [&](Db& db) { return meta::inline_total(db) - own + size <= params_.inline_budget; });
     if (!fits) {
-        return false;  // бюджет исчерпан — файл идёт позиционным (до M3; потом в пакет)
+        return false;  // бюджет инлайна исчерпан: файл идёт в пакет или позиционным
     }
     Bytes data(static_cast<size_t>(size));
     read_staging({ino, 0}, 0, data);
@@ -487,7 +486,8 @@ bool Vfs::try_seal_inline(int64_t ino, const Inode& inode, int64_t size) {
         if (attrs) {
             u.mtime_ns = attrs->mtime_ns;
         }
-        // ctime — момент изменения индекса (запечатывание в инлайн): SPEC 12.3, recover.
+        // ctime — момент изменения индекса (запечатывание в инлайн): по нему recover находит
+        // запечатанное после коммита.
         u.ctime_ns = std::max({inode.ctime_ns, attrs ? attrs->mtime_ns : 0, now_ns()});
         meta::update_attrs(db, ino, u);
         return true;
@@ -519,7 +519,7 @@ std::vector<UploadTarget> Vfs::seal_file(int64_t ino, SealMode mode) {
     const bool explicit_request = mode == SealMode::explicit_request;
     const int64_t deadline =
         now_ns() - std::chrono::duration_cast<std::chrono::nanoseconds>(opts_.seal_delay).count();
-    // Класс хранения выбирается заново при каждом запечатывании (SPEC 6.5): инлайн, пакет,
+    // Класс хранения выбирается заново при каждом запечатывании: инлайн, пакет,
     // позиционный. Позиция 0 — единственная возможная у файла не больше pack_threshold ≤ S.
     const bool only_pos0 = idxs.size() == 1 && idxs.front() == 0;
     if (only_pos0 && size <= params_.inline_max && try_seal_inline(ino, *inode, size)) {
@@ -580,7 +580,7 @@ void Vfs::discard_upload(int64_t chunk_id, std::optional<int64_t> msg_id) {
             const std::array<int64_t, 1> ids{*msg_id};
             store_.delete_messages(ids);
         } catch (const store::StoreError& e) {
-            // Запись журнала остаётся: сироту уберёт монтирование (SPEC 7.2, шаг 7).
+            // Запись журнала остаётся: сироту уберёт монтирование.
             spdlog::warn("vfs: deleting unneeded chunk {} (msg {}) failed: {}", chunk_id, *msg_id,
                          e.what());
             return;
@@ -589,7 +589,7 @@ void Vfs::discard_upload(int64_t chunk_id, std::optional<int64_t> msg_id) {
     state_.remove_upload(chunk_id);
 }
 
-// --- загрузка (SPEC 8.1, шаги 1–5) ---
+// --- загрузка ---
 
 void Vfs::upload_chunk(const ChunkKey& key) {
     const auto s = chunk_size_;
@@ -608,7 +608,7 @@ void Vfs::upload_chunk(const ChunkKey& key) {
         }
     };
 
-    // Место под зашифрованную копию (SPEC 8.3): целиком и до полосы, чтобы ожидание не держало
+    // Место под зашифрованную копию: целиком и до полосы, чтобы ожидание не держало
     // ни писателей, ни применение пакетов. Берётся размером полного чанка (из него и состоит
     // резерв заливки R), после шифрования уменьшается до фактического.
     // Аренда берётся после быстрого выхода: чанка уже нет в overlay (применён или отброшен) —
@@ -704,7 +704,7 @@ void Vfs::upload_chunk(const ChunkKey& key) {
         if (opts_.upload_probe) {
             opts_.upload_probe("dedup_hinted");
         }
-        lease->release();  // шифрованной копии в tmp/ нет: место под неё не нужно (SPEC 8.3)
+        lease->release();  // шифрованной копии в tmp/ нет: место под неё не нужно
     } else {
         enc_size = static_cast<int64_t>(crypto::chunk_encrypted_size(static_cast<uint64_t>(valid)));
         lease->shrink_to(static_cast<uint64_t>(enc_size));
@@ -820,11 +820,11 @@ void Vfs::upload_chunk(const ChunkKey& key) {
                     u.mtime_ns = attrs->mtime_ns;
                 } else if (key.idx * s + len > cur->size) {
                     // Индекс сам по себе не должен держать экстент за inodes.size: иначе
-                    // после обратного расширения без overlay ожил бы хвост (SPEC 6.2).
+                    // после обратного расширения без overlay ожил бы хвост.
                     u.size = key.idx * s + len;
                 }
                 // ctime — момент привязки чанка в индексе (в том числе дедуплицированного): по нему
-                // recover --export-dirty находит залитое после коммита (SPEC 12.3).
+                // recover --export-dirty находит залитое после коммита.
                 u.ctime_ns = std::max({cur->ctime_ns, clean_now ? attrs->mtime_ns : 0, now_ns()});
                 meta::update_attrs(db, key.ino, u);
                 return clean_now;
@@ -884,7 +884,7 @@ void Vfs::resolve_empty_position(const ChunkKey& key, uint64_t incarnation) {
         return;
     }
     // Позиция 0 инлайн-файла пуста, а позиции idx ≥ 1 и непустой inline_data остались: убрать
-    // позицию 0 нельзя, непустой инлайн остался бы в индексе при экстентах idx ≥ 1 (SPEC 8.1).
+    // позицию 0 нельзя, непустой инлайн остался бы в индексе при экстентах idx ≥ 1.
     // Позиция заново наполняется из inline_data и заливается ещё раз (сейчас она uploading).
     if (key.idx == 0 && restore_inline_position(key.ino)) {
         overlay_->mark_queued(key, false);
@@ -899,7 +899,7 @@ void Vfs::resolve_empty_position(const ChunkKey& key, uint64_t incarnation) {
             return std::nullopt;
         }
         // Пустой инлайн (файл усекли до нуля) нужно убрать: иначе экстенты следующих позиций
-        // нельзя записать (SPEC 6.2). Непустой инлайн остаётся — это откат к коммиту.
+        // нельзя записать. Непустой инлайн остаётся — это откат к коммиту.
         if (key.idx == 0 && cur->inline_len && *cur->inline_len == 0) {
             meta::clear_inline(db, key.ino);
         }
@@ -962,7 +962,7 @@ void Vfs::flush_all() {
         auto t = seal_file(ino, SealMode::explicit_request);
         all.insert(all.end(), t.begin(), t.end());
     }
-    // Объекты запечатанных файлов лежат в открытом пакете: закрыть его (SPEC 6.5).
+    // Объекты запечатанных файлов лежат в открытом пакете: закрыть его.
     packs_->close_open(true);
     wait_targets(all);
 }
@@ -971,7 +971,7 @@ void Vfs::commit_or_throw() {
     if (opts_.read_only) {
         return;  // --ro: коммитить нечего
     }
-    // SPEC 7.3: после CAS-конфликта данные закоммитить нельзя, молчаливый успех был бы ложью.
+    // После CAS-конфликта данные закоммитить нельзя, молчаливый успех был бы ложью.
     if (committer_.read_only()) {
         throw FsError(EIO, "file system is read-only after a commit conflict: cannot commit");
     }

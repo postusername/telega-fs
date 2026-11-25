@@ -1,6 +1,6 @@
 #pragma once
 
-// TdClient (SPEC 10.1): один экземпляр TDLib. Запросы с @extra и таймаутом, подписки на апдейты
+// TdClient: один экземпляр TDLib. Запросы с @extra и таймаутом, подписки на апдейты
 // по @type, слежение за состоянием авторизации. Создаётся через TdRuntime::create_client().
 //
 // Потоки. Ответы и апдейты разбираются в потоке приёма TdRuntime. Обработчики подписок вызываются
@@ -68,7 +68,7 @@ struct TdClientStats {
 
 // Итог запроса: ответ или ошибка. Ошибка передаётся значением, а не через exception_ptr:
 // счётчик ссылок exception_ptr живёт в неинструментированной libstdc++, и TSan видел ложную гонку
-// между потоком приёма и вызывающим (CI M2). Исключение бросается уже в вызывающем потоке.
+// между потоком приёма и вызывающим (в CI). Исключение бросается уже в вызывающем потоке.
 struct TdOutcome {
     Json value;
     std::optional<TdError> error;
@@ -128,7 +128,7 @@ class TdClient {
     // опередить апдейт.
     void seed_auth_state(const Json& state);
 
-    // Закрытие (SPEC 10.1): `close` / `logOut` и ожидание authorizationStateClosed. false —
+    // Закрытие: `close` / `logOut` и ожидание authorizationStateClosed. false —
     // не успели за timeout. Закрыть клиент надо до выхода из процесса, иначе TDLib не
     // сбросит данные.
     bool close(std::chrono::milliseconds timeout = std::chrono::seconds{30});

@@ -62,7 +62,7 @@ int init_impl(const InitArgs& args) {
     if (opts.chunk_size <= 0) {
         throw CommandError("chunk size must be positive");
     }
-    // SPEC 6.5: пакет — обычный чанк, и в нём должно умещаться хотя бы два файла порога.
+    // Пакет — обычный чанк, и в нём должно умещаться хотя бы два файла порога.
     if (opts.pack_threshold > opts.chunk_size || opts.pack_target > opts.chunk_size ||
         opts.pack_target < 2 * opts.pack_threshold) {
         throw CommandError(
@@ -174,7 +174,7 @@ struct MountContext {
     Secret passphrase;  // key.passphrase — копия этого значения; затираются обе
 };
 
-// Остановка и финальный коммит (SPEC 7.2, «Размонтирование»): сначала Vfs::shutdown (залить
+// Остановка и финальный коммит: сначала Vfs::shutdown (залить
 // всё, не дольше sync_timeout), затем MountedFs::unmount (финальный коммит, clean_shutdown = 1).
 // Ошибки только в лог и в код выхода. Вызывается из destroy FUSE (ядро размонтировало), из
 // close() (сигнал) или при ошибке запуска; выполняется один раз.
@@ -196,7 +196,7 @@ class Teardown {
                 try {
                     fs->unmount();
                 } catch (const meta::CommitError& e) {
-                    // unmount() бросает после завершения остановки (SPEC 7.2): коммитер
+                    // unmount() бросает после завершения остановки: коммитер
                     // остановлен, флаги записаны, незакоммиченное остаётся в локальном
                     // состоянии. Для вызывающего это неудача размонтирования: код выхода 1.
                     spdlog::error(
@@ -208,7 +208,8 @@ class Teardown {
                     spdlog::error("final commit failed: {}", e.what());
                     failed_ = true;
                 }
-                // Коммитер остановлен: Vfs больше не опрашивается (SPEC 7.1, отсрочка коммита).
+                // Коммитер остановлен: Vfs больше не опрашивается (set_upload_probe задавал
+                // отсрочку коммита).
                 fs->committer().set_upload_probe({});
             }
             spdlog::info("unmounted");
@@ -234,7 +235,7 @@ int serve(MountContext& ctx, Ready& ready) {
     store::Store* store = nullptr;
     std::unique_ptr<meta::MountedFs> mounted;
     std::unique_ptr<vfs::Vfs> vfs;
-    // Управляющий сокет (SPEC 12.4): уничтожается раньше vfs и mounted, на которые ссылаются его
+    // Управляющий сокет: уничтожается раньше vfs и mounted, на которые ссылаются его
     // обработчики. Начало размонтирования (begin_stop) идёт из Teardown, до остановки Vfs.
     std::unique_ptr<CtlServer> ctl;
     Teardown teardown;
@@ -248,7 +249,7 @@ int serve(MountContext& ctx, Ready& ready) {
     };
     try {
         if (p.store == StoreKind::telegram) {
-            // SPEC 7.2, шаги 1–3: keyring (пароль), TDLib, getChat. Без интерактива: если
+            // Как при монтировании: keyring (пароль), TDLib, getChat. Без интерактива: если
             // сессия не авторизована, подсказка запустить login.
             if (!p.chat_id) {
                 throw CommandError("profile '" + ctx.args.global.profile +
@@ -314,7 +315,7 @@ int serve(MountContext& ctx, Ready& ready) {
         vfs = std::make_unique<vfs::Vfs>(
             mounted->meta(), mounted->state(), mounted->store(), mounted->committer(),
             mounted->keys(), vfs::VfsPaths{ctx.loaded.paths.staging(), ctx.loaded.paths.tmp()}, vo);
-        // SPEC 7.1: пока очередь заливки не пуста, коммит по commit_interval откладывается.
+        // Пока очередь заливки не пуста, коммит по commit_interval откладывается.
         mounted->committer().set_upload_probe([v = vfs.get()] {
             const vfs::VfsStatus st = v->status();
             return st.queued + st.uploading > 0;
@@ -346,7 +347,7 @@ int serve(MountContext& ctx, Ready& ready) {
         ctl->start();
         ready.ok();
         frontend.serve();
-        ctl->begin_stop();  // сокет не должен пережить размонтирование (SPEC 12.4)
+        ctl->begin_stop();  // сокет не должен пережить размонтирование
         frontend.close();
         teardown.run(vfs.get(), mounted.get());
         return teardown.failed() ? 1 : 0;

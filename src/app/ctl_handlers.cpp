@@ -22,7 +22,7 @@ ctl::Handlers make_mount_handlers(vfs::Vfs& vfs, meta::MountedFs& mounted,
         return status_to_json(s);
     };
 
-    // sync: SPEC 7.3 — после успеха пространство имён переживает сбой. Vfs::sync заливает всё
+    // sync: после успеха пространство имён переживает сбой. Vfs::sync заливает всё
     // грязное и коммитит; в --ro он успешен (сохранять нечего), после CAS-конфликта — EIO.
     h.sync = [&vfs, &mounted, read_only_mount]() -> json {
         try {

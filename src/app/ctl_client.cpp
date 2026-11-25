@@ -36,7 +36,7 @@ std::optional<std::string> exchange(const fs::path& sock, std::string_view reque
             continue;
         }
         if (n < 0 && (errno == EPIPE || errno == ECONNRESET)) {
-            // Сервер мог ответить, не дочитав запрос (busy, SPEC 12.4) и закрыть соединение:
+            // Сервер мог ответить, не дочитав запрос (busy) и закрыть соединение:
             // ответ уже лежит в сокете, его надо дочитать, а не терять.
             break;
         }

@@ -1,5 +1,5 @@
 // create-bot: создаёт тестового бота у @BotFather тестового DC от имени тестового пользователя и
-// дописывает токен в creds (SPEC 17.2). Токен не печатается: тексты BotFather с токеном в вывод
+// дописывает токен в creds. Токен не печатается: тексты BotFather с токеном в вывод
 // не попадают (в подробном режиме выводятся только с замаскированным токеном).
 
 #include <algorithm>
@@ -224,7 +224,7 @@ void add_create_bot_command(CLI::App& app, const BenchOptions& options, int* exi
     cmd->add_flag("-v,--verbose", *verbose, "Print the dialog with @BotFather (tokens are masked)");
     cmd->callback([&options, exit_code, verbose] {
         if (!options.use_test_dc) {
-            // SPEC 17.2: на боевых серверах бота создаёт пользователь сам, не бенч.
+            // На боевых серверах бота создаёт пользователь сам, не бенч.
             throw std::runtime_error("create-bot works only with --test-dc");
         }
         BenchEnv env(options);

@@ -93,7 +93,7 @@ FsStatus read_state_status(const fs::path& state_db, const fs::path& staging_dir
         s.pending_patchsets = static_cast<size_t>(st.column_int64(0));
     }
     {
-        // Размер — длина staging-файла (логическая, как в учёте SPEC 8.3). Файл мог исчезнуть
+        // Размер — длина staging-файла (логическая, как в учёте staging). Файл мог исчезнуть
         // между чтением строки и stat: тогда он не считается.
         Stmt st{db, "SELECT ino, path FROM dirty_chunks"};
         std::set<int64_t> inos;

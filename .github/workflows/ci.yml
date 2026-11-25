@@ -6,7 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    # Раз в неделю трогаем кэш TDLib, иначе GitHub удалит его через 7 дней простоя (SPEC 15.6).
+    # Раз в неделю трогаем кэш TDLib, иначе GitHub удалит его через 7 дней простоя.
     - cron: "17 3 * * 1"
 
 # Тип события в группе: прогон по расписанию не вытесняет ожидающий push-прогон в main.
@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 env:
-  # Полный хеш коммита TDLib 1.8.70 (SPEC 15.3). Ключ кэша строится из него.
+  # Полный хеш коммита TDLib 1.8.70. Ключ кэша строится из него.
   TDLIB_COMMIT: ba976cb4aba53a82eff425db2f85e2741774c944
   # Увеличить при любом изменении рецепта сборки TDLib ниже.
   TDLIB_RECIPE: v1
@@ -51,7 +51,7 @@ jobs:
       - name: Add swap
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          # TDLib требует 1,5–3 ГБ RAM на поток компиляции (SPEC 15.3).
+          # TDLib требует 1,5–3 ГБ RAM на поток компиляции.
           sudo fallocate -l 8G /tdlib-swap
           sudo chmod 600 /tdlib-swap
           sudo mkswap /tdlib-swap
@@ -133,7 +133,7 @@ jobs:
           path: ${{ env.DEPS_DIR }}
           key: deps-${{ hashFiles('cmake/deps.cmake') }}
 
-      # Кэш ccache пишет только main, PR его только читает (SPEC 15.6).
+      # Кэш ccache пишет только main, PR его только читает.
       - name: Restore ccache
         uses: actions/cache/restore@v6
         with:
@@ -142,7 +142,7 @@ jobs:
           restore-keys: ${{ env.CCACHE_KEY }}-
 
       # Счётчики лежат в каталоге кэша и восстанавливаются вместе с ним: обнуляем, чтобы
-      # --show-stats после сборки показал статистику этого прогона (SPEC 15.6).
+      # --show-stats после сборки показал статистику этого прогона.
       - name: Reset ccache statistics
         run: ccache --zero-stats
 
@@ -167,9 +167,43 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ env.CCACHE_KEY }}-${{ github.sha }}
 
-      # Длинные fsx-прогоны (метка long, десятки минут) только вручную: ctest -L long (SPEC 14).
+      # Длинные fsx-прогоны (метка long, десятки минут) только вручную: ctest -L long.
       - name: Test
         run: ctest --preset ${{ matrix.preset }} -LE long
+
+  # Сборка без TDLib: ядро, юнит- и FUSE-тесты на LocalDirStore. Не ждёт задачу tdlib, поэтому
+  # в свежем форке даёт результат за минуты, пока TDLib ещё собирается.
+  core:
+    name: core (gcc-13, no TDLib)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CC: gcc-13
+      CXX: g++-13
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-13 g++-13 ninja-build pkg-config libfuse3-dev libsodium-dev libzstd-dev
+
+      - name: Restore dependency archives
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('cmake/deps.cmake') }}
+
+      - name: Configure
+        run: cmake --preset core
+
+      - name: Build
+        run: cmake --build --preset core
+
+      - name: Test
+        run: ctest --preset core -LE long
 
   # Отдельная задача без checkout: право удалять кэши не получает код из репозитория.
   ccache-cleanup:
@@ -184,7 +218,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - name: Keep only the newest ccache and clang-tidy cache entries
-        # Старые записи иначе вытесняют кэш TDLib из лимита репозитория (SPEC 15.6).
+        # Старые записи иначе вытесняют кэш TDLib из лимита репозитория.
         run: |
           : > stale.txt
           for prefix in ccache- clang-tidy-; do
@@ -250,7 +284,7 @@ jobs:
           key: deps-${{ hashFiles('cmake/deps.cmake') }}
 
       # Кэш чистых результатов clang-tidy (tools/ci/tidy-cache-key.py): пишет только main,
-      # PR только читает (SPEC 15.6). Ключ файла внутри кэша сам учитывает TU, флаги,
+      # PR только читает. Ключ файла внутри кэша сам учитывает TU, флаги,
       # .clang-tidy и версию clang-tidy, поэтому запись кэша общая.
       - name: Restore clang-tidy cache
         uses: actions/cache/restore@v6

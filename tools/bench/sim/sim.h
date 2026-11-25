@@ -1,6 +1,6 @@
 #pragma once
 
-// tgfs-sim: офлайн-модель записи мелких файлов (SPEC 6.5, 7.1, 8.1, 10.2; эксперимент E9, 17.12).
+// tgfs-sim: офлайн-модель записи мелких файлов (эксперимент E9).
 // Модель дискретно-событийная: писатель (файловая нагрузка), запечатывание с выбором класса
 // хранения, открытый пакет, очередь отправки с токен-бакетами лимитов, коммит индекса. Сети и
 // диска нет, время — модельные секунды. Допущения по времени собраны в Params и в отчёте E9.
@@ -26,7 +26,7 @@ struct Op {
 };
 
 struct Params {
-    // Параметры ФС (SPEC 12.2).
+    // Параметры ФС.
     int64_t chunk_size = 16 * kMiB;
     int64_t inline_max = 4 * kKiB;
     int64_t inline_budget = 16 * kMiB;
@@ -34,7 +34,7 @@ struct Params {
     int64_t pack_target = 16 * kMiB;
     double pack_max_age_s = 30;
     double commit_interval_s = 60;
-    // SPEC 7.1: пока очередь заливки данных не пуста, коммит по таймеру откладывается, но не
+    // Пока очередь заливки данных не пуста, коммит по таймеру откладывается, но не
     // дольше чем на commit_defer_factor · commit_interval_s. 0 — без отсрочки (как в E9).
     double commit_defer_factor = 0;
     int commit_every_chunks = 64;
@@ -43,7 +43,7 @@ struct Params {
     double seal_delay_s = 5;
     int64_t staging_limit = 8 * kGiB;
 
-    // Лимиты отправки (SPEC 10.2, E5). limits = false — без лимитов (для сравнения).
+    // Лимиты отправки (E5). limits = false — без лимитов (для сравнения).
     bool limits = true;
     double send_rate_per_min = 12;
     double send_burst = 5;
@@ -121,7 +121,7 @@ struct Metrics {
                                           static_cast<double>(pack_plain_alive)
                                     : 0.0;
     }
-    // Доля пакетов, закрытых по fsync или pack_max_age (SPEC 17.12), и то же с размонтированием.
+    // Доля пакетов, закрытых по fsync или pack_max_age, и то же с размонтированием.
     [[nodiscard]] double undersized_share() const {
         return packs > 0
                    ? static_cast<double>(packs_by_age + packs_by_fsync) / static_cast<double>(packs)

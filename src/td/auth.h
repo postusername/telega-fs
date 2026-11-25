@@ -1,8 +1,8 @@
 #pragma once
 
-// Авторизация (SPEC 10.1, 10.3): машина состояний по updateAuthorizationState. Что спросить у
+// Авторизация: машина состояний по updateAuthorizationState. Что спросить у
 // человека (или ответить самому), решает AuthPrompter: `telega-fs login` спрашивает пользователя,
-// `tgfs-bench` отвечает по правилам тестового DC (SPEC 17.2). Параметры setTdlibParameters
+// `tgfs-bench` спрашивает в терминале или отвечает сам. Параметры setTdlibParameters
 // приходят извне.
 
 #include <chrono>
@@ -13,7 +13,7 @@
 
 namespace telega::td {
 
-// Поля setTdlibParameters. Значения по умолчанию — из SPEC 10.1.
+// Поля setTdlibParameters. Значения по умолчанию подходят для telega-fs.
 struct TdlibParameters {
     bool use_test_dc = false;
     std::string database_directory;

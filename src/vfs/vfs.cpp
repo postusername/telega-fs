@@ -1,4 +1,4 @@
-// Vfs: конструктор, общие помощники и операции пространства имён (SPEC 6.2, 9).
+// Vfs: конструктор, общие помощники и операции пространства имён.
 
 #include "vfs/vfs.h"
 
@@ -96,7 +96,7 @@ Vfs::Vfs(meta::MetaStore& meta, meta::StateStore& state, store::Store& store,
     opts_.upload_concurrency = std::max<uint32_t>(opts_.upload_concurrency, 1);
     std::filesystem::create_directories(paths_.staging);
     std::filesystem::create_directories(paths_.tmp);
-    // Учёт staging (SPEC 8.3). Резерв заливки R = число одновременных put_chunk × размер
+    // Учёт staging. Резерв заливки R = число одновременных put_chunk × размер
     // зашифрованного чанка, плюс открытый текст одного собираемого пакета (до chunk_size):
     // сборка и шифрование пакетов идут по одному (PackWriter::stage_mu_), а в tmp/ при этом
     // лежат и открытый текст, и зашифрованный файл.
@@ -291,7 +291,7 @@ void Vfs::maybe_reap(int64_t ino) {
         return;
     }
     if (read_only()) {
-        return;  // удалит следующее монтирование (SPEC 7.2, шаг 8)
+        return;  // удалит следующее монтирование
     }
     const std::unique_lock lock(stripe(ino));
     if (in_use(ino)) {
@@ -780,7 +780,7 @@ void Vfs::release(uint64_t fh) {
 }
 
 void Vfs::flush(uint64_t /*fh*/) {
-    // close() не ждёт загрузки (SPEC 8.1): данные уже в overlay.
+    // close() не ждёт загрузки: данные уже в overlay.
 }
 
 // --- каталоги ---
@@ -933,7 +933,7 @@ bool Vfs::close_open_pack() {
 
 PackStatus Vfs::pack_status() const { return packs_->status(); }
 
-// --- учёт staging и обратное давление (SPEC 8.3) ---
+// --- учёт staging и обратное давление ---
 
 void Vfs::wait_for_space(uint64_t shortage, std::chrono::steady_clock::time_point deadline) {
     if (budget_->never_fits_user(shortage)) {
@@ -986,7 +986,7 @@ void Vfs::relieve_pressure(uint64_t extra) {
         }
         const PressurePlan plan = overlay_->plan_pressure(need_free, detached);
         for (const int64_t ino : plan.inos) {
-            // Без seal_delay: запечатывается весь файл, в том числе недописанные чанки (SPEC 8.1).
+            // Без seal_delay: запечатывается весь файл, в том числе недописанные чанки.
             seal_file(ino, SealMode::release);
         }
         // Объекты, запечатанные в открытый пакет, освободят место только после его заливки.

@@ -10,7 +10,7 @@ namespace telega::crypto {
 
 namespace {
 
-// Раскладка keyring (SPEC 11). Всё, что после wrapped_tdlib, — нули.
+// Раскладка keyring. Всё, что после wrapped_tdlib, — нули.
 constexpr std::array<char, 8> kMagic{'T', 'G', 'F', 'S', 'K', 'E', 'Y', '1'};
 constexpr uint8_t kVersion = 1;
 constexpr size_t kOffVersion = 8;
@@ -96,7 +96,7 @@ KeyringFile parse_keyring(ByteSpan raw) {
     std::copy_n(raw.begin() + kOffWrappedTdlib, keyring.wrapped_tdlib.size(),
                 keyring.wrapped_tdlib.begin());
     if (detail::all_zero(keyring.fs_uuid) != detail::all_zero(keyring.wrapped_master)) {
-        // Keyring без ФС — оба поля нулевые (SPEC 11); одно из двух — порча.
+        // Keyring без ФС — оба поля нулевые; одно из двух — порча.
         throw CorruptError("keyring: fs_uuid and wrapped_master disagree");
     }
     return keyring;
@@ -118,7 +118,7 @@ std::optional<UnlockedKeys> unlock_keyring(const KeyringFile& keyring, const Key
     if (!keyring_has_fs(keyring)) {
         throw std::logic_error("keyring without a file system has no master key");
     }
-    // Неверный пароль или keyfile распознаётся по wrapped_master (SPEC 11).
+    // Неверный пароль или keyfile распознаётся по wrapped_master.
     std::optional<Key> master = unwrap_key(kek, keyring.wrapped_master);
     if (!master) {
         return std::nullopt;

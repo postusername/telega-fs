@@ -1,4 +1,4 @@
-# Своя статическая SQLite из amalgamation (SPEC 15.2): session extension для дельта-журнала
+# Своя статическая SQLite из amalgamation: session extension для дельта-журнала
 # и одна версия формата патчей и VACUUM INTO на всех машинах. TDLib несёт свою копию
 # с символами tdsqlite3_*, поэтому конфликтов при линковке нет.
 

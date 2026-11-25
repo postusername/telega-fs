@@ -1,4 +1,4 @@
-# E11: снимок индекса без блокировки записи (SPEC 17.14). Гоняется на MetaStore с LocalDirStore,
+# E11: снимок индекса без блокировки записи. Гоняется на MetaStore с LocalDirStore,
 # TDLib не нужен.
 #
 # Вариант (c) требует SQLITE_ENABLE_SNAPSHOT. Глобальный флаг в cmake/sqlite.cmake не нужен:

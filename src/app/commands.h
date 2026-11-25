@@ -1,7 +1,7 @@
 #pragma once
 
-// Команды CLI login, logout, init и mount (SPEC 12.3). Разбор аргументов (CLI11) остаётся в
-// main.cpp, здесь — сама работа. Эта библиотека не линкуется с TDLib (SPEC 15.4): транспорт
+// Команды CLI login, logout, init и mount. Разбор аргументов (CLI11) остаётся в
+// main.cpp, здесь — сама работа. Эта библиотека не линкуется с TDLib: транспорт
 // TDLib приходит из main через set_transport_factory (app/tg_session.h).
 
 #include <cstdint>

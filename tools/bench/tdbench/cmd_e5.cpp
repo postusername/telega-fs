@@ -1,4 +1,4 @@
-// e5: лимиты отправки в режиме бота (SPEC 17.8). Канал создаёт пользователь (setup, сообщений
+// e5: лимиты отправки в режиме бота. Канал создаёт пользователь (setup, сообщений
 // от пользователя нет), всю нагрузку несёт бот в отдельном каталоге сессии <state-dir>/bot-e5.
 //
 //   tgfs-bench e5 [--probe] setup      пользователь создаёт канал и добавляет бота администратором
@@ -62,7 +62,7 @@ constexpr int64_t kServerIdShift = 20;
 constexpr uint64_t kKiB = 1024;
 constexpr uint64_t kMiB = 1024 * kKiB;
 constexpr uint64_t kSeed = 0xE5E5E5E5ULL;
-constexpr int64_t kMaxFloodWaitSeconds = 3600;  // SPEC 17.2: больше часа — остановиться
+constexpr int64_t kMaxFloodWaitSeconds = 3600;  // больше часа — остановиться
 constexpr double kBandwidthShare = 0.8;  // ниже этой доли заданного темпа — упёрлись в канал
 constexpr int kMaxStepAttempts = 3;  // повторов ступени, сорванной сетью (disturbed)
 constexpr int kDeleteBatch = 100;
@@ -1401,7 +1401,7 @@ void cmd_teardown(BenchEnv& env, const BenchOptions& options, const E5Options& e
 }  // namespace
 
 void add_e5_command(CLI::App& app, const BenchOptions& options, int* exit_code) {
-    auto* cmd = app.add_subcommand("e5", "Experiment E5: send limits in bot mode (SPEC 17.8)");
+    auto* cmd = app.add_subcommand("e5", "Experiment E5: send limits in bot mode");
     cmd->require_subcommand(1);
     auto e5 = std::make_shared<E5Options>();
     e5->out = default_out_dir("05-e5-send-limits");

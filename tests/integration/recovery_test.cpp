@@ -1,4 +1,4 @@
-// Интеграционные тесты восстановления (SPEC 7.2, 12.3, 16 M4) на LocalDirStore: потеря головы и
+// Интеграционные тесты восстановления на LocalDirStore: потеря головы и
 // mount --force-local, fsck и recover --export-dirty настоящим бинарником telega-fs. Без
 // /dev/fuse пропускаются (GTEST_SKIP).
 
@@ -93,7 +93,7 @@ class RecoveryTest : public ::testing::Test {
     std::unique_ptr<Env> env_;
 };
 
-// Критерий M4 (SPEC 16): закреп снят, сообщение головы удалено; mount отказывает с подсказкой,
+// Закреп снят, сообщение головы удалено; mount отказывает с подсказкой,
 // mount --ro показывает локальный индекс, mount --force-local возвращает всё на место.
 TEST_F(RecoveryTest, LostHeadIsRefusedThenForceLocalBringsEverythingBack) {
     Env& e = start();

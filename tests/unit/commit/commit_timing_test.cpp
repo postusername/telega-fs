@@ -1,4 +1,4 @@
-// Коммит, SPEC 7.1: отсрочка по commit_interval, пока очередь заливки не пуста, и CAS с повтором
+// Коммит: отсрочка по commit_interval, пока очередь заливки не пуста, и CAS с повтором
 // после своего pin (кэш TDLib показывает старую голову).
 
 #include <gtest/gtest.h>
@@ -21,7 +21,7 @@ using test::CommitEnv;
 using test::FakeClock;
 
 // Store, который после set_head несколько раз отвечает на read_head старой головой или 404,
-// как TDLib с кэшем ChannelFull (SPEC 2). Всё остальное пробрасывает.
+// как TDLib с кэшем ChannelFull. Всё остальное пробрасывает.
 class StaleHeadStore final : public store::Store {
   public:
     StaleHeadStore(store::Store& inner, FakeClock& clock) : inner_(inner), clock_(clock) {}
@@ -82,7 +82,7 @@ class Timing : public CommitEnv {
     void SetUp() override {
         CommitEnv::SetUp();
         commit_config_.clock = &clock_;
-        commit_config_.cas_retry_window = 90s;  // значения по умолчанию, SPEC 7.1
+        commit_config_.cas_retry_window = 90s;  // значения по умолчанию
         commit_config_.commit_interval = 60s;
         commit_config_.commit_every_chunks = 3;
         commit_config_.retry_min = 1s;
@@ -257,7 +257,7 @@ TEST_F(CasRetry, ShutdownInterruptsTheWaitWithoutReadOnly) {
     EXPECT_FALSE(fs->read_only());  // остановка — не конфликт
 }
 
-// --- неподтверждённый pin и кэш TDLib (SPEC 7.1) ---
+// --- неподтверждённый pin и кэш TDLib ---
 
 class UnconfirmedWindow : public Timing {
   protected:

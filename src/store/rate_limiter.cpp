@@ -64,7 +64,7 @@ RateLimiter::Clock::time_point RateLimiter::ready_at_locked(Clock::time_point no
         }
     }
     // Действие без байтов (pin, unpin, удаление) не ждёт бакета байтов, даже если он в минусе после
-    // крупного документа (SPEC 10.2).
+    // крупного документа.
     if (options_.bytes_per_minute > 0 && bytes > 0) {
         const double need =
             std::min(static_cast<double>(bytes), static_cast<double>(options_.bytes_burst));

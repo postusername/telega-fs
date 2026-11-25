@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Офлайн-часть E9 (SPEC 17.12): все прогоны tgfs-sim, из которых сделан отчёт.
+# Офлайн-часть E9: все прогоны tgfs-sim, из которых сделан отчёт.
 # Использование: tools/bench/sim/run-e9.sh <tgfs-sim> <каталог вывода>
 # Корпуса: tools/bench/corpora/{c1.csv,c1-switch.csv,c1-switch-rev.csv,c2-sizes.csv}.
 set -euo pipefail

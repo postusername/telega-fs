@@ -242,7 +242,7 @@ class VfsEnv {
     }
 
     // «Падение» и перезапуск: Vfs уничтожается без заливки, базы открываются заново.
-    // Как монтирование (SPEC 7.2, шаг 8), удаляет отсоединённые inode.
+    // Как монтирование, удаляет отсоединённые inode.
     Vfs& restart() { return restart(options); }
     Vfs& restart(const VfsOptions& o) {
         vfs.reset();

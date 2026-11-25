@@ -227,7 +227,7 @@ void DownloadScheduler::apply_file(const Json& file, bool from_reply) {
         f.active->last_progress = Clock::now();
     }
     f.last_total = total;
-    // «Не качается» при непокрытом окне — признак обрыва (SPEC 10.2), но только апдейт именно об
+    // «Не качается» при непокрытом окне — признак обрыва, но только апдейт именно об
     // этом окне. По исходникам TDLib 1.8.70 (FileManager.cpp: download() выставляет download_offset
     // и сбрасывает апдейт до ответа на downloadFile; on_download_ok/on_download_error_impl после
     // последнего прогресса сбрасывают отдельный updateFile с is_downloading_active = false) такой
@@ -419,7 +419,7 @@ std::string DownloadScheduler::pread_range(int32_t file_id, int64_t offset,
         path = refresh_path(file_id, deadline);
     }
     // ENOENT сразу после завершения скачивания — не ошибка: временный файл переименован, путь
-    // берётся заново (SPEC 8.2).
+    // берётся заново.
     constexpr int kAttempts = 4;
     for (int attempt = 0; attempt < kAttempts; ++attempt) {
         try {
@@ -610,7 +610,7 @@ void DownloadScheduler::read_impl(const FileRef& file, uint64_t offset, std::spa
             }
         }
     };
-    // TDLib считает диапазон готовым, а локального файла нет (SPEC 10.2): так бывает с файлом,
+    // TDLib считает диапазон готовым, а локального файла нет: так бывает с файлом,
     // который отправил этот процесс (local.path — временная ссылка, уже удалённая), и с файлом,
     // удалённым за спиной TDLib. getFileDownloadedPrefixSize и getFile состояние диска не
     // проверяют (FileManager.cpp 1.8.70: get_file_view().downloaded_prefix() смотрит только на
@@ -697,7 +697,7 @@ void DownloadScheduler::prefetch(const FileRef& file, uint64_t offset, uint64_t 
     if (b <= a) {
         return;
     }
-    // Уже скачанное начало диапазона не запрашивается (SPEC 8.2: проверка готового — первый шаг).
+    // Уже скачанное начало диапазона не запрашивается (проверка готового — первый шаг).
     try {
         const Json r = client_.call(
             Json{{"@type", "getFileDownloadedPrefixSize"}, {"file_id", file.id}, {"offset", a}},

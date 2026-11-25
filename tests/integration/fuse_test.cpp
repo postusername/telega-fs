@@ -1,4 +1,4 @@
-// Интеграционные FUSE-тесты на LocalDirStore (SPEC 14): настоящий бинарник telega-fs,
+// Интеграционные FUSE-тесты на LocalDirStore: настоящий бинарник telega-fs,
 // настоящие монтирования. Без /dev/fuse или fusermount3 тесты пропускаются (GTEST_SKIP).
 
 #include <dirent.h>
@@ -172,7 +172,7 @@ TEST_F(FuseTest, InitTwiceAndTelegramStoreAreRefused) {
     ProfileSpec tg;
     tg.store = "telegram";
     Env t{tg};
-    // Профиль Telegram без login (M2): init и mount отказывают с понятной подсказкой, без сети.
+    // Профиль Telegram без login: init и mount отказывают с понятной подсказкой, без сети.
     r = t.run({"init"});
     EXPECT_NE(r.exit.code, 0);
     EXPECT_NE(r.output.find("--chat ID"), std::string::npos) << r.output;
@@ -203,7 +203,7 @@ TEST_F(FuseTest, PassphraseProfile) {
     EXPECT_EQ(e.log_text().find("correct horse"), std::string::npos);
 }
 
-// --- сценарии SPEC 14 ---
+// --- сценарии ---
 
 TEST_F(FuseTest, LargeSequentialFileSurvivesRemount) {
     Env& e = start();
@@ -509,7 +509,7 @@ TEST_F(FuseTest, RemountKeepsDataAndAttributes) {
 }
 
 // Много мелких файлов: между инлайном (до 4 КиБ) и позиционным классом они лежат в пакетах
-// (SPEC 6.5), сообщений в канале заметно меньше, чем файлов; после перемонтирования, на «другой
+//, сообщений в канале заметно меньше, чем файлов; после перемонтирования, на «другой
 // машине» и после правок часть файлов (перезапись, рост до позиционного, удаление) читается верно.
 TEST_F(FuseTest, ManySmallFilesLiveInPacksAndSurviveRemount) {
     Env& e = start();  // chunk_size 1 МиБ: pack_threshold 512 КиБ, pack_target 1 МиБ
@@ -550,7 +550,7 @@ TEST_F(FuseTest, ManySmallFilesLiveInPacksAndSurviveRemount) {
     check(*m, {}, {});
     ASSERT_TRUE(m->unmount().ok());
 
-    // Документов .bin в канале заметно меньше, чем файлов вне инлайна (SPEC 14, E2E M3).
+    // Документов .bin в канале заметно меньше, чем файлов вне инлайна.
     const auto messages = [&] {
         size_t n = 0;
         for (const auto& de : fs::directory_iterator(e.local_dir() / "msgs")) {
@@ -732,7 +732,7 @@ struct CrashCase {
 
 class FuseCrashTest : public FuseTest, public ::testing::WithParamInterface<CrashCase> {};
 
-// SPEC 7.3: данные, записанные до последнего успешного fsync, переживают падение процесса.
+// Данные, записанные до последнего успешного fsync, переживают падение процесса.
 TEST_P(FuseCrashTest, DataBeforeLastFsyncSurvives) {
     Env& e = start();
     constexpr uint64_t kA = kMiB + kMiB / 2;  // 2 чанка: put_chunk #1, #2

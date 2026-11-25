@@ -1,4 +1,4 @@
-// E1, корпус C1 «Исходники» (SPEC 17.3, 17.4): нагрузки 1–5 через Vfs в процессе, без FUSE.
+// E1, корпус C1 «Исходники»: нагрузки 1–5 через Vfs в процессе, без FUSE.
 // После каждой нагрузки — запечатывание и заливка чанков (flush_all) и коммит индекса.
 
 #include <fcntl.h>
@@ -24,7 +24,7 @@ namespace telega::bench::e1 {
 
 namespace {
 
-constexpr int64_t kInlineMax = 4096;  // inline_max по умолчанию (SPEC 6.5)
+constexpr int64_t kInlineMax = 4096;  // inline_max по умолчанию
 
 ByteSpan bs(const std::string& s) { return std::as_bytes(std::span{s.data(), s.size()}); }
 

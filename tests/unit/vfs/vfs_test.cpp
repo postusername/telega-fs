@@ -1,4 +1,4 @@
-// Vfs: пространство имён — ошибки из таблицы SPEC 9, rename во всех вариантах, symlink,
+// Vfs: пространство имён — коды ошибок, rename во всех вариантах, symlink,
 // readdir с курсором, nlink, setattr, statfs, read-only.
 
 #include "vfs/vfs.h"
@@ -461,7 +461,7 @@ TEST_F(VfsNamespace, ReadOnlyRejectsChanges) {
     const uint64_t fh = v().open(f, O_RDONLY);
     v().release(fh);
     // После CAS-конфликта закоммитить нельзя: fsync, fsyncdir, sync и flush_all — EIO
-    // (SPEC 7.3), а не молчаливый успех.
+    //, а не молчаливый успех.
     const uint64_t commits = env.committer.commits.load();
     EXPECT_EQ(err_of([&] { v().fsync(f); }), EIO);
     EXPECT_EQ(err_of([&] { v().fsyncdir(kRoot); }), EIO);

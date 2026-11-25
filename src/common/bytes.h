@@ -1,7 +1,6 @@
 #pragma once
 
-// Байтовые буферы и little-endian кодирование для форматов на диске и в канале
-// (SPEC 5, 6.3, 11).
+// Байтовые буферы и little-endian кодирование для форматов на диске и в канале.
 
 #include <array>
 #include <cstddef>
@@ -16,7 +15,7 @@ using Bytes = std::vector<std::byte>;
 using ByteSpan = std::span<const std::byte>;
 using MutableByteSpan = std::span<std::byte>;
 
-// Идентификатор ФС (SPEC 6.2, meta.fs_uuid).
+// Идентификатор ФС (meta.fs_uuid).
 using FsUuid = std::array<std::byte, 16>;
 
 inline void put_u64_le(MutableByteSpan out, uint64_t v) {

@@ -45,7 +45,7 @@ void make_private_dir(const fs::path& dir) {
     fs::permissions(dir, fs::perms::owner_all, fs::perm_options::replace);
 }
 
-// Уровень лога TDLib: 1 (SPEC 10.1), для отладки TGFS_BENCH_TDLIB_LOG=0..5.
+// Уровень лога TDLib: 1, для отладки TGFS_BENCH_TDLIB_LOG=0..5.
 int tdlib_log_level() {
     if (const char* v = std::getenv("TGFS_BENCH_TDLIB_LOG"); v != nullptr && *v != '\0') {
         return std::clamp(std::atoi(v), 0, 5);
@@ -86,7 +86,7 @@ std::string ask(const std::string& prompt, bool secret = false) {
     return trim(line);
 }
 
-// Подсказчик входа по правилам тестового DC (SPEC 17.2).
+// Подсказчик входа по правилам тестового DC.
 class AutoPrompter final : public td::AuthPrompter {
   public:
     AutoPrompter(const BenchOptions& options, Creds creds, std::ostream& progress)
@@ -289,7 +289,7 @@ fs::path account_dir(const BenchOptions& options, Account account) {
            (std::string{options.use_test_dc ? "test-" : ""} + account_name(account));
 }
 
-// Ключ БД TDLib для боевых серверов: 32 случайных байта в <state-dir>/db.key (0600, SPEC 17.2).
+// Ключ БД TDLib для боевых серверов: 32 случайных байта в <state-dir>/db.key (0600).
 static std::string load_or_create_db_key(const BenchOptions& options) {
     const fs::path file = options.state_dir / "db.key";
     if (fs::exists(file)) {

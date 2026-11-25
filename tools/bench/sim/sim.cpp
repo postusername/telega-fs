@@ -79,7 +79,7 @@ class Sim {
         tok_a_ = p.send_burst;
         tok_b_ = p.send_bytes_burst;
         if (p.pack_threshold > p.chunk_size) {
-            throw std::runtime_error("pack_threshold must be <= chunk_size (SPEC 6.5)");
+            throw std::runtime_error("pack_threshold must be <= chunk_size");
         }
     }
 
@@ -205,7 +205,7 @@ class Sim {
             return;
         }
         if (sub_ + 1 < nsub_) {
-            // Писатель ушёл дальше по файлу: полный чанк идёт в очередь (SPEC 8.1).
+            // Писатель ушёл дальше по файлу: полный чанк идёт в очередь.
             enqueue_item(Kind::Chunk, p_.chunk_size, kNone, false);
             staged_ += p_.chunk_size;
             ++files_[op.id].streamed;
@@ -260,7 +260,7 @@ class Sim {
         maybe_commit();
     }
 
-    // ---- запечатывание и классы (SPEC 6.5) ----
+    // ---- запечатывание и классы ----
     void release_old(File& f) {
         switch (f.cls) {
             case Cls::Inline:
@@ -380,7 +380,7 @@ class Sim {
         try_dispatch();
     }
 
-    // ---- fsync (SPEC 8.1) ----
+    // ---- fsync ----
     void start_fsync(uint32_t id) {
         ++m_.fsyncs;
         const File& f = files_[id];
@@ -403,7 +403,7 @@ class Sim {
         maybe_commit();
     }
 
-    // ---- очередь отправки и лимиты (SPEC 10.2) ----
+    // ---- очередь отправки и лимиты ----
     uint32_t enqueue_item(Kind kind, int64_t bytes, uint32_t pack, bool high) {
         const auto id = static_cast<uint32_t>(items_.size());
         items_.push_back(Item{kind, bytes, pack, false});
@@ -543,7 +543,7 @@ class Sim {
         pk.state = PackState::Done;
         for (const Obj& o : pk.objs) {
             File& f = files_[o.id];
-            // SPEC 6.5: объект, чей файл изменился за время заливки, не применяется.
+            // Объект, чей файл изменился за время заливки, не применяется.
             if (f.ver == o.ver && f.cls == Cls::Pack && f.pack == id && !f.applied) {
                 f.applied = true;
                 pk.live += o.len;
@@ -558,7 +558,7 @@ class Sim {
         }
     }
 
-    // ---- коммит (SPEC 7.1) ----
+    // ---- коммит ----
     // NOLINTNEXTLINE(misc-no-recursion)
     void maybe_commit() {
         if (commit_busy_) {

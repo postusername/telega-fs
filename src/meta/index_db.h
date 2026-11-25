@@ -1,6 +1,6 @@
 #pragma once
 
-// MetaStore — владелец index.sqlite (SPEC 6.2, 6.6, 9).
+// MetaStore — владелец index.sqlite.
 //
 // Устройство:
 // - одно писательское соединение под мьютексом; на нём всегда открыта сессия session
@@ -10,18 +10,18 @@
 //   параллельно с писателем). Соединение потока создаётся при первом read и живёт до
 //   уничтожения MetaStore;
 // - строки, изменённые с последнего забора патча, считаются (rows_since_take): по ним
-//   CommitManager решает, когда делать промежуточный забор (SPEC 6.6);
+//   CommitManager решает, когда делать промежуточный забор;
 // - перед первой пользовательской записью после забора патча (или после открытия) вызывается
-//   dirty-хук: в продукте он долговечно ставит index_dirty = 1 в state.sqlite (SPEC 6.6).
+//   dirty-хук: в продукте он долговечно ставит index_dirty = 1 в state.sqlite.
 //   Служебные записи (WriteKind::housekeeping: строка index_history, удаление строк chunks
 //   уборкой) хук не вызывают, но попадают в сессию.
 //
-// Порядок блокировок (SPEC 9): мьютекс MetaStore берётся раньше блокировок overlay и
+// Порядок блокировок: мьютекс MetaStore берётся раньше блокировок overlay и
 // StateStore. Вызывать Store под ним НЕ ДОПУСКАЕТСЯ. Мьютекс рекурсивный и честный (FIFO,
 // fair_mutex.h): внутри with_lock можно звать write, take_patchset и cut_snapshot; внутри
 // write — нельзя (logic_error).
 //
-// Снимок индекса (SPEC 6.6, «Снимок без блокировки записи»): под мьютексом только cut_snapshot
+// Снимок индекса без блокировки записи: под мьютексом только cut_snapshot
 // (пересоздание сессии и фиксация среза читательской транзакцией), копирование идёт после
 // блокировки через SnapshotCopy (snapshot.h).
 
@@ -51,11 +51,11 @@ namespace telega::meta {
 
 inline constexpr int64_t kFormatVersion = 1;
 
-// PRAGMA journal_size_limit писательского соединения (SPEC 6.6): пока идёт копирование среза,
+// PRAGMA journal_size_limit писательского соединения: пока идёт копирование среза,
 // контрольная точка WAL стоит, и файл растёт на объём записей; лимит усекает его после неё.
 inline constexpr int64_t kJournalSizeLimit = 64LL << 20;
 
-// Параметры init (SPEC 12.2): пишутся в meta и потом не меняются.
+// Параметры init: пишутся в meta и потом не меняются.
 struct InitParams {
     FsUuid fs_uuid{};
     int64_t chunk_size = 16LL << 20;
@@ -70,11 +70,11 @@ struct InitParams {
 };
 
 enum class WriteKind : uint8_t {
-    user,  // обычная операция ФС: ставит dirty (SPEC 6.6)
+    user,  // обычная операция ФС: ставит dirty
     housekeeping,  // служебная запись коммита или уборки: dirty не ставит
 };
 
-// Замер забора патча (для эксперимента E1, SPEC 17.4).
+// Замер забора патча (для эксперимента E1).
 struct TakeStats {
     std::chrono::nanoseconds wait{0};    // ожидание мьютекса
     std::chrono::nanoseconds locked{0};  // время под мьютексом
@@ -85,7 +85,7 @@ class MetaStore {
   public:
     using DirtyHook = std::function<void()>;
 
-    // Создать новый index.sqlite: схема 6.2, ключи meta, корень (ino 1). Файл пишется рядом
+    // Создать новый index.sqlite: схема, ключи meta, корень (ino 1). Файл пишется рядом
     // и переименовывается, path не должен существовать (иначе std::runtime_error).
     static void create(const std::filesystem::path& path, const InitParams& params);
 
@@ -148,13 +148,13 @@ class MetaStore {
     [[nodiscard]] uint64_t lock_waiters() const { return mutex_.waiting(); }
 
     // Забрать patchset сессии и пересоздать её, сбросить dirty_since_take и счётчик строк
-    // (SPEC 7.1, шаг 2). Пустой результат — изменений не было. stats, если задан, получает время
+    // (шаг 2 коммита). Пустой результат — изменений не было. stats, если задан, получает время
     // ожидания и удержания мьютекса и размер патча. Запись патча в pending_patchsets делает
-    // вызывающий уже без блокировки MetaStore (SPEC 6.6).
+    // вызывающий уже без блокировки MetaStore.
     Bytes take_patchset(TakeStats* stats = nullptr);
 
     // Сколько строк изменено удачными записями (user и housekeeping) с последнего
-    // take_patchset/cut_snapshot/vacuum_into (SPEC 6.6, промежуточный забор). Оценка сверху: одна
+    // take_patchset/cut_snapshot/vacuum_into (для промежуточного забора). Оценка сверху: одна
     // строка, изменённая дважды, считается дважды.
     [[nodiscard]] int64_t rows_since_take() const noexcept { return rows_.load(); }
 
@@ -163,7 +163,7 @@ class MetaStore {
     // MetaStore.
     void set_rows_hook(int64_t threshold, std::function<void()> hook);
 
-    // Фиксация среза снимка (SPEC 6.6, 7.1 шаг 2): под мьютексом пересоздать сессию БЕЗ забора
+    // Фиксация среза снимка (шаг 2 коммита): под мьютексом пересоздать сессию БЕЗ забора
     // патча (строки сессии уже в срезе), сбросить dirty_since_take и счётчик строк и на
     // читательском соединении снимка выполнить BEGIN с чтением страницы. Срез приходится ровно на
     // точку пересоздания сессии: записи после неё попадут в новую сессию, то есть в следующую
@@ -172,12 +172,12 @@ class MetaStore {
     // вызывающий. Ошибка — исключение, в этом случае сессия и счётчики не тронуты, транзакция
     // закрыта. Вызывать из write нельзя (logic_error). stats, если задан, получает ожидание и
     // удержание мьютекса (patch_bytes = 0). Запись патча не делается: при сбое снимка
-    // вызывающий ставит force_snapshot (SPEC 7.1).
+    // вызывающий ставит force_snapshot.
     void cut_snapshot(SnapshotReader& reader, TakeStats* stats = nullptr);
 
     // VACUUM INTO path под мьютексом (path не должен существовать), пересоздать сессию, сбросить
     // dirty_since_take. Держит блокировку на всё время копии (около 4 с на 1M инодов), поэтому
-    // коммит его не использует (SPEC 6.6: вместо него cut_snapshot и SnapshotCopy); остаётся
+    // коммит его не использует (вместо него cut_snapshot и SnapshotCopy); остаётся
     // для тестов и инструментов. Результат может быть не в WAL-режиме.
     void vacuum_into(const std::filesystem::path& path);
 
@@ -186,7 +186,7 @@ class MetaStore {
 
     [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
 
-    // --- дельта-журнал (SPEC 6.6) ---
+    // --- дельта-журнал ---
 
     // Склеить патчи по порядку через sqlite3changegroup. Порча — IndexCorrupt.
     static Bytes concat_patchsets(std::span<const Bytes> patches);
@@ -219,7 +219,7 @@ class MetaStore {
 
     std::filesystem::path path_;
 
-    FairRecursiveMutex mutex_;  // писательское соединение, сессия, хук; честный (SPEC 9)
+    FairRecursiveMutex mutex_;  // писательское соединение, сессия, хук; честный
     std::unique_ptr<Db> writer_;
     std::unique_ptr<Session> session_;  // уничтожается раньше writer_
     DirtyHook dirty_hook_;

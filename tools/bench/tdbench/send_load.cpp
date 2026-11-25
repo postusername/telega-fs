@@ -124,7 +124,7 @@ const char* send_kind_name(SendKind kind) {
 }
 
 td::Json single_document_request(int64_t chat_id, const std::filesystem::path& file) {
-    // Документ по SPEC 4: inputDocument с disable_content_type_detection, без подписи.
+    // Документ как в telega-fs: inputDocument с disable_content_type_detection, без подписи.
     return send_document_request(chat_id, file);
 }
 

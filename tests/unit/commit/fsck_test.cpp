@@ -1,4 +1,4 @@
-// fsck (SPEC 12.3): согласованность индекса, существование сообщений, проверка тегов, исправление
+// fsck: согласованность индекса, существование сообщений, проверка тегов, исправление
 // только индекса. ФС строится настоящим Vfs на LocalDirStore: инлайн, пакеты и позиционные чанки.
 
 #include "meta/fsck.h"
@@ -169,7 +169,7 @@ TEST_F(Fsck, BrokenRefcountLiveBytesAndDeadSinceAreFoundAndRepaired) {
     EXPECT_EQ(chunk_row(*fs, c3).refcount, 1);
 }
 
-// Мёртвый чанк, чьё сообщение уже убрано уборкой, а строка осталась (SPEC 6.6, служебные записи
+// Мёртвый чанк, чьё сообщение уже убрано уборкой, а строка осталась (служебные записи
 // не уходят в канал без коммита): это не порча, fsck чистый и ничего не помечает.
 TEST_F(Fsck, DeadChunkRowWithoutMessageIsNotAnIssue) {
     populate();
@@ -436,7 +436,7 @@ TEST_F(Fsck, UnavailableStoreIsAnIssueAndNothingIsMarkedBad) {
     EXPECT_FALSE(res.changed());
 }
 
-// fsck ничего не удаляет в канале (SPEC 12.3): служебное монтирование не убирает сирот
+// fsck ничего не удаляет в канале: служебное монтирование не убирает сирот
 // upload_journal, а обычное — убирает.
 TEST_F(Fsck, MaintenanceMountDoesNotDeleteOrphanMessages) {
     populate();

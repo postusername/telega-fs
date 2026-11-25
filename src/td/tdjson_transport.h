@@ -1,7 +1,7 @@
 #pragma once
 
-// Настоящий транспорт поверх td_json_client (SPEC 10.1). Линкуется только к бинарникам
-// (telega-fs, tgfs-bench), юнит-тесты его не используют (SPEC 15.4).
+// Настоящий транспорт поверх td_json_client. Линкуется только к бинарникам
+// (telega-fs, tgfs-bench), юнит-тесты его не используют.
 
 #include <chrono>
 #include <filesystem>
@@ -20,7 +20,7 @@ class TdJsonTransport final : public TdTransport {
     std::string execute(const std::string& request_json) override;
 };
 
-// Лог TDLib в файл (SPEC 10.1): setLogStream(logStreamFile, max_file_size) и уровень. Лог один на
+// Лог TDLib в файл: setLogStream(logStreamFile, max_file_size) и уровень. Лог один на
 // процесс, вызывать надо до создания первого клиента. false — TDLib отказал (текст ошибки в
 // error, если не nullptr).
 bool set_tdlib_log_file(TdTransport& transport, const std::filesystem::path& path,
